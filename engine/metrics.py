@@ -1,19 +1,27 @@
 # engine/metrics.py
 import numpy as np
 
+
 def calc_drawdown(equity_curve):
+    """
+    equity_curve: List[{"date", "total", ...}]
+    """
     if not equity_curve:
         return {}
-    equity = np.array([x["total_value"] for x in equity_curve])
+
+    equity = np.array([x["total"] for x in equity_curve])
+
     peak = np.maximum.accumulate(equity)
     drawdown = (equity - peak) / peak
+
     max_dd = drawdown.min()
-    max_dd_end = drawdown.argmin()
-    max_dd_start = equity[:max_dd_end].argmax() if max_dd_end > 0 else 0
+    end_idx = drawdown.argmin()
+    start_idx = peak[: end_idx + 1].argmax()
+
     return {
         "max": {
             "drawdown": float(max_dd),
-            "start": int(max_dd_start),
-            "end": int(max_dd_end),
+            "start": equity_curve[start_idx]["date"],
+            "end": equity_curve[end_idx]["date"],
         }
     }

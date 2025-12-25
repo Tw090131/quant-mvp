@@ -1,68 +1,123 @@
 # engine/portfolio.py
-import pandas as pd
-
 class Portfolio:
-    def __init__(self, init_cash=1_000_000, max_drawdown_pct=0.3):
+    def __init__(self, init_cash=1_000_000):
         self.init_cash = init_cash
         self.cash = init_cash
-        self.positions = {}  # code -> shares
-        self.prices = {}     # code -> last_price
-        self.max_drawdown_pct = max_drawdown_pct
 
-        self.equity_curve = []  # 每日总资产
-        self.daily_pnl = []     # 每日盈亏
+        self.positions_hold = {}    # 可卖
+        self.positions_today = {}   # T+1 冻结
 
+        self.prices = {}
+
+        self.equity_curve = []      # 每日资产
+        self.daily_pnl = []         # 每日盈亏
+        self.daily_trades = []      # 交易明细
+
+        self._last_total = init_cash
+
+    # ===== T+1 =====
+    def on_new_day(self):
+        for code, shares in self.positions_today.items():
+            self.positions_hold[code] = self.positions_hold.get(code, 0) + shares
+        self.positions_today.clear()
+
+    # =================
     def update_price(self, code, price):
         self.prices[code] = price
 
     def total_value(self):
-        value = self.cash
-        for code, shares in self.positions.items():
-            value += shares * self.prices.get(code, 0)
-        return value
+        total = self.cash
+        for pos in (self.positions_hold, self.positions_today):
+            for code, shares in pos.items():
+                total += shares * self.prices.get(code, 0)
+        return total
 
-    def rebalance(self, target_weights: dict, risk_mgr=None):
+    def rebalance(self, date, target_weights, risk_mgr, fee_rate=0.001):
         total_value = self.total_value()
+
         for code, weight in target_weights.items():
-            if risk_mgr:
-                weight = risk_mgr.cap_position(weight)
-            target_value = total_value * weight
+            weight = risk_mgr.cap_position(weight)
             price = self.prices.get(code)
             if not price or price <= 0:
                 continue
 
-            current_shares = self.positions.get(code, 0)
+            target_value = total_value * weight
             target_shares = int(target_value / price)
+
+            current_shares = (
+                self.positions_hold.get(code, 0)
+                + self.positions_today.get(code, 0)
+            )
+
             diff = target_shares - current_shares
-            cost = diff * price
 
-            if self.cash - cost < 0:
-                continue
+            # === SELL（只能卖 hold）===
+            if diff < 0:
+                sellable = self.positions_hold.get(code, 0)
+                sell_qty = min(-diff, sellable)
+                if sell_qty <= 0:
+                    continue
 
-            self.cash -= cost
-            self.positions[code] = target_shares
+                proceeds = sell_qty * price
+                fee = proceeds * fee_rate
 
+                self.cash += proceeds - fee
+                self.positions_hold[code] -= sell_qty
+
+                self.daily_trades.append({
+                    "date": date,
+                    "code": code,
+                    "side": "SELL",
+                    "price": price,
+                    "shares": sell_qty,
+                    "fee": fee,
+                })
+
+            # === BUY（进冻结）===
+            elif diff > 0:
+                cost = diff * price
+                fee = cost * fee_rate
+                if self.cash < cost + fee:
+                    continue
+
+                self.cash -= cost + fee
+                self.positions_today[code] = self.positions_today.get(code, 0) + diff
+
+                self.daily_trades.append({
+                    "date": date,
+                    "code": code,
+                    "side": "BUY",
+                    "price": price,
+                    "shares": diff,
+                    "fee": fee,
+                })
+
+    # ===== 日结（关键）=====
     def record_daily(self, date):
-        current_value = self.total_value()
-        self.equity_curve.append({"date": pd.to_datetime(date), "total_value": current_value})
+        total = self.total_value()
+        pnl = total - self._last_total
+        ret = pnl / self._last_total if self._last_total > 0 else 0
 
-        if len(self.equity_curve) == 1:
-            pnl = current_value - self.init_cash
-        else:
-            pnl = current_value - self.equity_curve[-2]["total_value"]
+        self.equity_curve.append({
+            "date": date,
+            "total": total,
+            "cash": self.cash,
+        })
 
-        self.daily_pnl.append({"date": pd.to_datetime(date), "pnl": pnl})
+        self.daily_pnl.append({
+            "date": date,
+            "pnl": pnl,
+            "return": ret,
+            "total": total,
+        })
 
-    def max_drawdown_triggered(self):
-        if not self.equity_curve:
-            return False
-        equity = [x["total_value"] for x in self.equity_curve]
-        peak = max(equity)
-        dd = (equity[-1] - peak) / peak
-        return dd < -self.max_drawdown_pct
+        self._last_total = total
 
+    # ===== DataFrame 输出 =====
     def get_equity_df(self):
+        import pandas as pd
         return pd.DataFrame(self.equity_curve)
 
     def get_daily_pnl_df(self):
+        import pandas as pd
         return pd.DataFrame(self.daily_pnl)

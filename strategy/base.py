@@ -1,13 +1,14 @@
 # strategy/base.py
 class StrategyBase:
-    def __init__(self, datas):
+    def __init__(self, datas: dict):
         """
-        datas: list[pd.DataFrame]
+        datas: code -> DataFrame
         """
-        self.datas = {}
-        for i, df in enumerate(datas):
-            code = getattr(df, "attrs", {}).get("code", f"code_{i}")
-            self.datas[code] = df
+        self.datas = datas
 
     def on_bar(self, dt):
+        """
+        返回目标权重:
+        { code: weight }
+        """
         raise NotImplementedError
