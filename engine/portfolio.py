@@ -34,6 +34,7 @@ class Portfolio:
 
     def rebalance(self, date, target_weights, risk_mgr, fee_rate=0.001):
         total_value = self.total_value()
+        trades_today = []
 
         for code, weight in target_weights.items():
             weight = risk_mgr.cap_position(weight)
@@ -64,7 +65,7 @@ class Portfolio:
                 self.cash += proceeds - fee
                 self.positions_hold[code] -= sell_qty
 
-                self.daily_trades.append({
+                trades_today.append({
                     "date": date,
                     "code": code,
                     "side": "SELL",
@@ -83,7 +84,7 @@ class Portfolio:
                 self.cash -= cost + fee
                 self.positions_today[code] = self.positions_today.get(code, 0) + diff
 
-                self.daily_trades.append({
+                trades_today.append({
                     "date": date,
                     "code": code,
                     "side": "BUY",
@@ -92,10 +93,31 @@ class Portfolio:
                     "fee": fee,
                 })
 
+        # 写入每日交易
+        self.daily_trades.extend(trades_today)
+
+        return trades_today  # 方便 record_daily 计算 pnl
+
     # ===== 日结（关键）=====
-    def record_daily(self, date):
+    def record_daily(self, date, trades_today=None):
+        """
+        trades_today: 当天买卖列表
+        """
         total = self.total_value()
-        pnl = total - self._last_total
+
+        # 当天现金流（买入负，卖出正） + 手续费
+        cash_flow = 0
+        if trades_today:
+            for t in trades_today:
+                amt = t["price"] * t["shares"]
+                fee = t.get("fee", 0)
+                if t["side"] == "BUY":
+                    cash_flow -= (amt + fee)
+                else:
+                    cash_flow += (amt - fee)
+
+        # 当日盈亏 = 总资产变化 - 当日现金流
+        pnl = total - self._last_total - cash_flow
         ret = pnl / self._last_total if self._last_total > 0 else 0
 
         self.equity_curve.append({
@@ -121,3 +143,7 @@ class Portfolio:
     def get_daily_pnl_df(self):
         import pandas as pd
         return pd.DataFrame(self.daily_pnl)
+
+    def get_trades_df(self):
+        import pandas as pd
+        return pd.DataFrame(self.daily_trades)
