@@ -19,20 +19,21 @@ def run_backtest(
     strategy = StrategyClass(datas)
     risk_mgr = RiskManager()
 
-    trade_days = sorted({d for df in datas.values() for d in df.index})
+    # 获取交易日
+    trade_days = datas[next(iter(datas))].index
 
     for dt in trade_days:
-        portfolio.on_new_day()  # T+1 买入转持仓
+        # T+1 买入转持仓
+        portfolio.on_new_day()
 
-        # 更新当日价格
+        # 更新每个股票价格
         for code, df in datas.items():
-            if dt in df.index:
-                portfolio.update_price(code, df.loc[dt, "close"])
+            portfolio.update_price(code, df.loc[dt, "close"])
 
-        # 调用策略生成目标权重
+        # 获取策略信号
         target_weights = strategy.on_bar(dt)
 
-        # rebalance 返回当天交易列表
+        # 调仓，返回当天交易
         trades_today = portfolio.rebalance(
             date=dt,
             target_weights=target_weights,
@@ -40,7 +41,7 @@ def run_backtest(
             fee_rate=fee_rate,
         )
 
-        # 日结，计算每日盈亏
+        # 日结，计算总资产和每日盈亏
         portfolio.record_daily(dt, trades_today)
 
     # ===== 导出 CSV =====
@@ -60,10 +61,13 @@ def run_backtest(
         pnl_df.to_csv(pnl_csv, index=False)
         print(f"每日盈亏已写入: {os.path.abspath(pnl_csv)}")
 
+    # 计算最大回撤
+    drawdown = calc_drawdown(equity_df)
+
     return {
         "final_value": portfolio.total_value(),
         "equity": equity_df,
         "daily_pnl": pnl_df,
-        "drawdown": calc_drawdown(portfolio.equity_curve),
+        "drawdown": drawdown,
         "trades": trades_df,
     }

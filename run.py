@@ -18,5 +18,5 @@ result = run_backtest(
 )
 
 print("最终资产:", result["final_value"])
-print("最大回撤:", result["drawdown"]["max"]["drawdown"])
+print("最大回撤:", result["drawdown"]["max_drawdown"])
 
