@@ -1,12 +1,14 @@
-from data.cache_loader import load_daily_df_with_cache
+from data.cache_loader import load_daily_df_with_cache, load_minute_df_with_cache
 from engine.backtest import run_backtest
 from strategy.ma_cross import MaCross
+import akshare as ak
+codes = ["600519"]
 
-codes = ["300678"]
+# ===== 日线回测 =====
+# datas = {code: load_daily_df_with_cache(code, start="2025-08-01") for code in codes}
 
-datas = {}
-for code in codes:
-    datas[code] = load_daily_df_with_cache(code, start="2025-08-01")
+# ===== 分钟线回测（可选） =====
+datas = {code: load_minute_df_with_cache(code, period="1min",start="2025-08-01") for code in codes}
 
 result = run_backtest(
     datas,
@@ -19,4 +21,3 @@ result = run_backtest(
 
 print("最终资产:", result["final_value"])
 print("最大回撤:", result["drawdown"]["max_drawdown"])
-
