@@ -19,27 +19,32 @@ def run_backtest(
     strategy = StrategyClass(datas)
     risk_mgr = RiskManager()
 
-    trade_days = datas[next(iter(datas))].index
+    trade_days = sorted({d for df in datas.values() for d in df.index})
 
     for dt in trade_days:
-        portfolio.on_new_day()  # T+1 解冻
+        portfolio.on_new_day()  # T+1 买入转持仓
 
+        # 更新当日价格
         for code, df in datas.items():
-            portfolio.update_price(code, df.loc[dt, "close"])
+            if dt in df.index:
+                portfolio.update_price(code, df.loc[dt, "close"])
 
+        # 调用策略生成目标权重
         target_weights = strategy.on_bar(dt)
 
-        portfolio.rebalance(
+        # rebalance 返回当天交易列表
+        trades_today = portfolio.rebalance(
             date=dt,
             target_weights=target_weights,
             risk_mgr=risk_mgr,
             fee_rate=fee_rate,
         )
 
-        portfolio.record_daily(dt)
+        # 日结，计算每日盈亏
+        portfolio.record_daily(dt, trades_today)
 
     # ===== 导出 CSV =====
-    trades_df = pd.DataFrame(portfolio.daily_trades)
+    trades_df = portfolio.get_trades_df()
     equity_df = portfolio.get_equity_df()
     pnl_df = portfolio.get_daily_pnl_df()
 

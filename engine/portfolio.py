@@ -1,30 +1,35 @@
 # engine/portfolio.py
+import pandas as pd
+
 class Portfolio:
     def __init__(self, init_cash=1_000_000):
         self.init_cash = init_cash
         self.cash = init_cash
 
-        self.positions_hold = {}    # 可卖
-        self.positions_today = {}   # T+1 冻结
+        self.positions_hold = {}    # 可卖持仓
+        self.positions_today = {}   # 当日买入冻结，T+1 可卖
+        self.prices = {}            # 最新价格
+        self._prev_prices = {}      # 昨收价，用于计算未实现盈亏
+        self._cost_basis = {}       # 成本价
 
-        self.prices = {}
-
-        self.equity_curve = []      # 每日资产
+        self.equity_curve = []      # 每日总资产
         self.daily_pnl = []         # 每日盈亏
         self.daily_trades = []      # 交易明细
 
-        self._last_total = init_cash
-
     # ===== T+1 =====
     def on_new_day(self):
+        # 当日买入变为可卖持仓
         for code, shares in self.positions_today.items():
             self.positions_hold[code] = self.positions_hold.get(code, 0) + shares
         self.positions_today.clear()
+        # 更新昨日价格
+        self._prev_prices = self.prices.copy()
 
-    # =================
+    # ===== 更新价格 =====
     def update_price(self, code, price):
         self.prices[code] = price
 
+    # ===== 总资产 =====
     def total_value(self):
         total = self.cash
         for pos in (self.positions_hold, self.positions_today):
@@ -32,7 +37,12 @@ class Portfolio:
                 total += shares * self.prices.get(code, 0)
         return total
 
+    # ===== 调仓 =====
     def rebalance(self, date, target_weights, risk_mgr, fee_rate=0.001):
+        """
+        target_weights: code -> weight
+        返回 trades_today 方便 record_daily 计算 pnl
+        """
         total_value = self.total_value()
         trades_today = []
 
@@ -95,55 +105,62 @@ class Portfolio:
 
         # 写入每日交易
         self.daily_trades.extend(trades_today)
+        return trades_today
 
-        return trades_today  # 方便 record_daily 计算 pnl
-
-    # ===== 日结（关键）=====
+    # ===== 日结 =====
     def record_daily(self, date, trades_today=None):
         """
-        trades_today: 当天买卖列表
+        计算每日盈亏：
+        - 卖出产生的实现盈亏
+        - 持仓未实现盈亏
         """
-        total = self.total_value()
+        # 未实现盈亏（昨日持仓变化）
+        unrealized_pnl = 0
+        for code, shares in self.positions_hold.items():
+            if code in self._prev_prices and code in self.prices:
+                unrealized_pnl += shares * (self.prices[code] - self._prev_prices[code])
 
-        # 当天现金流（买入负，卖出正） + 手续费
-        cash_flow = 0
+        # 实现盈亏（卖出盈亏）
+        realized_pnl = 0
         if trades_today:
             for t in trades_today:
-                amt = t["price"] * t["shares"]
+                code = t["code"]
+                price = t["price"]
+                shares = t["shares"]
                 fee = t.get("fee", 0)
-                if t["side"] == "BUY":
-                    cash_flow -= (amt + fee)
-                else:
-                    cash_flow += (amt - fee)
 
-        # 当日盈亏 = 总资产变化 - 当日现金流
-        pnl = total - self._last_total - cash_flow
-        ret = pnl / self._last_total if self._last_total > 0 else 0
+                if t["side"] == "SELL":
+                    cost_price = self._cost_basis.get(code, price)
+                    realized_pnl += (price - cost_price) * shares - fee
+
+                elif t["side"] == "BUY":
+                    # 更新成本价（加权平均）
+                    old_shares = self.positions_hold.get(code, 0)
+                    old_cost = self._cost_basis.get(code, 0)
+                    new_shares = old_shares + shares
+                    self._cost_basis[code] = (old_cost * old_shares + price * shares) / new_shares
+
+        total_pnl = realized_pnl + unrealized_pnl
+        total_value = self.total_value()
 
         self.equity_curve.append({
             "date": date,
-            "total": total,
+            "total": total_value,
             "cash": self.cash,
         })
 
         self.daily_pnl.append({
             "date": date,
-            "pnl": pnl,
-            "return": ret,
-            "total": total,
+            "pnl": total_pnl,
+            "total": total_value,
         })
 
-        self._last_total = total
-
-    # ===== DataFrame 输出 =====
+    # ===== 输出 DataFrame =====
     def get_equity_df(self):
-        import pandas as pd
         return pd.DataFrame(self.equity_curve)
 
     def get_daily_pnl_df(self):
-        import pandas as pd
         return pd.DataFrame(self.daily_pnl)
 
     def get_trades_df(self):
-        import pandas as pd
         return pd.DataFrame(self.daily_trades)
