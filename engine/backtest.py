@@ -111,6 +111,19 @@ def run_backtest(
                 # 更新 context 的当前日期
                 strategy.context.current_date = dt
                 strategy.scheduler.on_bar(dt, strategy.context)
+                
+                # 检查是否是收盘时间（15:00），执行收盘后任务
+                # A股收盘时间是15:00，但分钟线数据可能是14:59或15:00
+                # 检查是否是当天的最后一个bar（收盘时间附近）
+                if hasattr(dt, 'hour'):
+                    # 如果是15:00，或者是当天的最后一个bar（下一个bar是第二天）
+                    is_last_bar = (i == len(trade_days) - 1) or \
+                                 (hasattr(trade_days[i+1], 'date') and hasattr(dt, 'date') and 
+                                  trade_days[i+1].date() != dt.date())
+                    
+                    if (dt.hour == 15 and dt.minute == 0) or \
+                       (dt.hour == 14 and dt.minute == 59 and is_last_bar):
+                        strategy.scheduler.on_after_close(strategy.context)
 
             # 获取策略信号
             target_weights = strategy.on_bar(dt)

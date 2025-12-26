@@ -31,6 +31,10 @@ class MaCross(StrategyBase):
         # 注意：需要分钟线数据才能触发定时任务
         # generate_signal=True 表示在该时间点产生交易信号
         self.run_daily(self.market_open, time='09:58', generate_signal=True)
+        
+        # === 注册收盘后任务 ===
+        # 收盘后执行，用于收盘后的数据处理、统计等
+        self.run_daily(self.after_market_close, time='after_close')
 
         # === 预计算均线 ===
         valid_codes = []
@@ -94,6 +98,32 @@ class MaCross(StrategyBase):
         
         if signals:
             logger.info(f"market_open 计算完成，产生 {len(signals)} 个买入信号")
+
+    def after_market_close(self, context):
+        """
+        收盘后执行的逻辑
+        
+        Args:
+            context: 上下文对象，包含 portfolio 和 data
+        """
+        # 获取当前交易日
+        if context.current_date is not None:
+            trade_date = context.current_date.strftime("%Y-%m-%d")
+            logger.info(f"执行 after_market_close [交易日: {trade_date}]，当前资产: {context.portfolio.total_value():,.2f}")
+        else:
+            logger.info(f"执行 after_market_close，当前资产: {context.portfolio.total_value():,.2f}")
+        
+        # 收盘后可以执行的操作：
+        # - 统计当天的交易情况
+        # - 计算当天的收益
+        # - 准备明天的交易计划
+        # - 记录日志等
+        
+        # 示例：记录当天的持仓情况
+        total_value = context.portfolio.total_value()
+        cash = context.portfolio.cash
+        positions_value = total_value - cash
+        logger.info(f"收盘后统计 - 总资产: {total_value:,.2f}, 现金: {cash:,.2f}, 持仓市值: {positions_value:,.2f}")
 
     def on_bar(self, dt: pd.Timestamp) -> Dict[str, float]:
         """

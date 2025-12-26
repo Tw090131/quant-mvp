@@ -15,7 +15,8 @@ class Scheduler:
     
     def __init__(self):
         """初始化调度器"""
-        self.daily_tasks: List[Tuple[Callable, str]] = []
+        self.daily_tasks: List[Tuple[Callable, str]] = []  # 普通定时任务
+        self.after_close_tasks: List[Callable] = []  # 收盘后任务
 
     def run_daily(self, func: Callable, time: str) -> None:
         """
@@ -23,11 +24,16 @@ class Scheduler:
         
         Args:
             func: 要执行的函数
-            time: 执行时间，格式 'HH:MM'
+            time: 执行时间，格式 'HH:MM' 或特殊值 'after_close'（收盘后）
         """
-        if not isinstance(time, str) or len(time) != 5 or time[2] != ":":
-            raise ValueError(f"时间格式错误，应为 'HH:MM'，当前值: {time}")
-        self.daily_tasks.append((func, time))
+        if time == "after_close":
+            # 收盘后任务
+            self.after_close_tasks.append(func)
+        elif isinstance(time, str) and len(time) == 5 and time[2] == ":":
+            # 普通定时任务
+            self.daily_tasks.append((func, time))
+        else:
+            raise ValueError(f"时间格式错误，应为 'HH:MM' 或 'after_close'，当前值: {time}")
 
     def on_bar(self, dt: pd.Timestamp, context) -> None:
         """
@@ -37,6 +43,7 @@ class Scheduler:
             dt: 当前时间
             context: 上下文对象
         """
+        # 执行普通定时任务
         for func, time_str in self.daily_tasks:
             if self._match_time(dt, time_str):
                 try:
@@ -45,6 +52,21 @@ class Scheduler:
                     import logging
                     logger = logging.getLogger(__name__)
                     logger.error(f"执行定时任务失败 {time_str}: {e}", exc_info=True)
+    
+    def on_after_close(self, context) -> None:
+        """
+        收盘后执行任务
+        
+        Args:
+            context: 上下文对象
+        """
+        for func in self.after_close_tasks:
+            try:
+                func(context)
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"执行收盘后任务失败: {e}", exc_info=True)
 
     def _match_time(self, dt: pd.Timestamp, time_str: str) -> bool:
         """

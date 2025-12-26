@@ -56,23 +56,34 @@ class StrategyBase(ABC):
         
         Args:
             func: 要执行的函数，函数签名应为 func(context)
-            time: 执行时间，格式 'HH:MM'，例如 '09:58'
+            time: 执行时间，格式 'HH:MM'（例如 '09:58'）或 'after_close'（收盘后）
             reference_security: 参考证券（保留参数，用于兼容聚宽接口，当前版本未使用）
             generate_signal: 是否在该时间点产生交易信号，True 表示 on_bar 在该时间点会返回信号
+                           注意：'after_close' 不支持 generate_signal
             
         示例:
             def market_open(context):
                 # 在每天9:58执行的逻辑
                 pass
             
+            def after_market_close(context):
+                # 收盘后执行的逻辑
+                pass
+            
             run_daily(market_open, time='09:58', generate_signal=True)
+            run_daily(after_market_close, time='after_close')
         """
         self.scheduler.run_daily(func, time)
         if generate_signal:
-            # 记录应该产生交易信号的时间点
-            if not hasattr(self, '_trade_times'):
-                self._trade_times = set()
-            self._trade_times.add(time)
+            if time == "after_close":
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning("'after_close' 不支持 generate_signal，已忽略")
+            else:
+                # 记录应该产生交易信号的时间点
+                if not hasattr(self, '_trade_times'):
+                    self._trade_times = set()
+                self._trade_times.add(time)
     
     def get_trade_times(self) -> set:
         """
