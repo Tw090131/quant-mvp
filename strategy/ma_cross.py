@@ -29,7 +29,8 @@ class MaCross(StrategyBase):
 
         # === 注册定时任务：每天9:58执行 ===
         # 注意：需要分钟线数据才能触发定时任务
-        self.run_daily(self.market_open, time='09:58')
+        # generate_signal=True 表示在该时间点产生交易信号
+        self.run_daily(self.market_open, time='09:58', generate_signal=True)
 
         # === 预计算均线 ===
         valid_codes = []
@@ -92,6 +93,9 @@ class MaCross(StrategyBase):
         """
         每个 bar 调用一次，生成交易信号
         
+        注意：如果使用 run_daily 并设置 generate_signal=True，
+        交易信号只在指定的时间点产生，其他时间返回空字典
+        
         Args:
             dt: 当前时间点
             
@@ -100,6 +104,13 @@ class MaCross(StrategyBase):
         """
         targets = {}
         
+        # 检查当前时间是否应该产生交易信号（从 run_daily 注册的时间中获取）
+        if not self.is_trade_time(dt):
+            # 不是交易时间，返回空字典
+            return targets
+        
+        # 在交易时间点，计算交易信号
+        # market_open 已经在 scheduler 中执行，这里使用实时数据计算
         for code, df in self.datas.items():
             if dt not in df.index:
                 continue
@@ -111,5 +122,6 @@ class MaCross(StrategyBase):
             # 双均线策略：短期均线上穿长期均线时买入
             if row["ma_short"] > row["ma_long"]:
                 targets[code] = self.weight
+                logger.debug(f"{code} 在 {dt} 产生买入信号，短期均线: {row['ma_short']:.2f}, 长期均线: {row['ma_long']:.2f}")
 
         return targets

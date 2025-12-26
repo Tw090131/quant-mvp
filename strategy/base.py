@@ -48,7 +48,8 @@ class StrategyBase(ABC):
         self, 
         func: Callable, 
         time: str = "09:30", 
-        reference_security: Optional[str] = None
+        reference_security: Optional[str] = None,
+        generate_signal: bool = False
     ) -> None:
         """
         注册每日定时任务（类似聚宽风格）
@@ -57,15 +58,47 @@ class StrategyBase(ABC):
             func: 要执行的函数，函数签名应为 func(context)
             time: 执行时间，格式 'HH:MM'，例如 '09:58'
             reference_security: 参考证券（保留参数，用于兼容聚宽接口，当前版本未使用）
+            generate_signal: 是否在该时间点产生交易信号，True 表示 on_bar 在该时间点会返回信号
             
         示例:
             def market_open(context):
                 # 在每天9:58执行的逻辑
                 pass
             
-            run_daily(market_open, time='09:58')
+            run_daily(market_open, time='09:58', generate_signal=True)
         """
         self.scheduler.run_daily(func, time)
+        if generate_signal:
+            # 记录应该产生交易信号的时间点
+            if not hasattr(self, '_trade_times'):
+                self._trade_times = set()
+            self._trade_times.add(time)
+    
+    def get_trade_times(self) -> set:
+        """
+        获取应该产生交易信号的时间点集合
+        
+        Returns:
+            时间点集合，格式为 {'HH:MM', ...}
+        """
+        return getattr(self, '_trade_times', set())
+    
+    def is_trade_time(self, dt: pd.Timestamp) -> bool:
+        """
+        检查当前时间是否应该产生交易信号
+        
+        Args:
+            dt: 当前时间点
+            
+        Returns:
+            True 表示应该产生交易信号
+        """
+        if not hasattr(self, '_trade_times') or not self._trade_times:
+            # 如果没有注册交易时间，默认所有时间都产生信号（兼容旧代码）
+            return True
+        
+        current_time = dt.strftime("%H:%M") if hasattr(dt, 'strftime') else None
+        return current_time in self._trade_times
 
     @abstractmethod
     def on_bar(self, dt: pd.Timestamp) -> Dict[str, float]:
