@@ -1,49 +1,109 @@
-# engine/portfolio.py
+"""
+组合管理模块
+负责持仓管理、资金管理、交易执行和记录
+"""
+import logging
+from typing import Dict, List, Optional
 import pandas as pd
+from engine.risk import RiskManager
+
+# 配置日志
+logger = logging.getLogger(__name__)
+
 
 class Portfolio:
-    def __init__(self, init_cash=1_000_000):
+    """
+    组合管理类
+    
+    管理持仓、资金和交易记录，支持 T+1 交易制度
+    """
+    
+    def __init__(self, init_cash: float = 1_000_000):
+        """
+        初始化组合
+        
+        Args:
+            init_cash: 初始资金
+        """
         self.init_cash = init_cash
         self.cash = init_cash
 
-        self.positions_hold = {}    # 可卖持仓
-        self.positions_today = {}   # T+1 买入冻结
+        self.positions_hold: Dict[str, int] = {}    # 可卖持仓 {code: shares}
+        self.positions_today: Dict[str, int] = {}   # T+1 买入冻结 {code: shares}
 
-        self.prices = {}            # 最新价格
+        self.prices: Dict[str, float] = {}          # 最新价格 {code: price}
 
-        self.equity_curve = []      # 每日总资产
-        self.daily_pnl = []         # 每日盈亏
-        self.daily_trades = []      # 交易明细
+        self.equity_curve: List[Dict] = []          # 每日总资产
+        self.daily_pnl: List[Dict] = []             # 每日盈亏
+        self.daily_trades: List[Dict] = []          # 交易明细
 
         self._last_total = init_cash
 
-    # ===== T+1 买入转持仓 =====
-    def on_new_day(self):
+    def on_new_day(self) -> None:
+        """
+        T+1 买入转持仓
+        将昨日买入的股票转为可卖持仓
+        """
         for code, shares in self.positions_today.items():
             self.positions_hold[code] = self.positions_hold.get(code, 0) + shares
         self.positions_today.clear()
 
-    # ===== 更新价格 =====
-    def update_price(self, code, price):
+    def update_price(self, code: str, price: float) -> None:
+        """
+        更新股票价格
+        
+        Args:
+            code: 股票代码
+            price: 最新价格
+        """
+        if price <= 0:
+            logger.warning(f"{code} 价格无效: {price}")
+            return
         self.prices[code] = price
 
-    # ===== 计算总资产 =====
-    def total_value(self):
+    def total_value(self) -> float:
+        """
+        计算总资产
+        
+        Returns:
+            总资产 = 现金 + 持仓市值
+        """
         total = self.cash
         for pos in (self.positions_hold, self.positions_today):
             for code, shares in pos.items():
-                total += shares * self.prices.get(code, 0)
+                price = self.prices.get(code, 0)
+                if price > 0:
+                    total += shares * price
         return total
 
-    # ===== 调仓 =====
-    def rebalance(self, date, target_weights, risk_mgr, fee_rate=0.001):
+    def rebalance(
+        self, 
+        date: pd.Timestamp, 
+        target_weights: Dict[str, float], 
+        risk_mgr: RiskManager, 
+        fee_rate: float = 0.001
+    ) -> List[Dict]:
+        """
+        调仓，根据目标权重调整持仓
+        
+        Args:
+            date: 交易日期
+            target_weights: 目标权重字典 {code: weight}
+            risk_mgr: 风险管理器
+            fee_rate: 手续费率
+            
+        Returns:
+            当天交易列表
+        """
         total_value = self.total_value()
         trades_today = []
 
         for code, weight in target_weights.items():
+            # 风控限制仓位
             weight = risk_mgr.cap_position(weight)
             price = self.prices.get(code)
             if not price or price <= 0:
+                logger.warning(f"{code} 价格无效，跳过调仓")
                 continue
 
             target_value = total_value * weight
@@ -68,6 +128,9 @@ class Portfolio:
 
                 self.cash += proceeds - fee
                 self.positions_hold[code] -= sell_qty
+                
+                if self.positions_hold[code] == 0:
+                    del self.positions_hold[code]
 
                 trades_today.append({
                     "date": date,
@@ -83,6 +146,7 @@ class Portfolio:
                 cost = diff * price
                 fee = cost * fee_rate
                 if self.cash < cost + fee:
+                    logger.warning(f"{code} 资金不足，无法买入 {diff} 股，需要 {cost + fee:.2f}，可用 {self.cash:.2f}")
                     continue
 
                 self.cash -= cost + fee
@@ -101,15 +165,18 @@ class Portfolio:
         self.daily_trades.extend(trades_today)
         return trades_today
 
-    # ===== 日结 =====
-    def record_daily(self, date, trades_today=None):
+    def record_daily(self, date: pd.Timestamp, trades_today: Optional[List[Dict]] = None) -> None:
         """
-        trades_today: 当天交易列表
+        日结，记录每日资产和盈亏
+        
+        Args:
+            date: 日期
+            trades_today: 当天交易列表
         """
         total = self.total_value()
 
         # 计算当日现金流：买入负，卖出正
-        cash_flow = 0
+        cash_flow = 0.0
         if trades_today:
             for t in trades_today:
                 amt = t["price"] * t["shares"]
@@ -121,7 +188,7 @@ class Portfolio:
 
         # 当日盈亏 = 总资产变化 - 当日现金流
         pnl = total - self._last_total - cash_flow
-        ret = pnl / self._last_total if self._last_total > 0 else 0
+        ret = pnl / self._last_total if self._last_total > 0 else 0.0
 
         self.equity_curve.append({
             "date": date,
@@ -138,12 +205,29 @@ class Portfolio:
 
         self._last_total = total
 
-    # ===== DataFrame 输出 =====
-    def get_equity_df(self):
+    def get_equity_df(self) -> pd.DataFrame:
+        """
+        获取资产曲线 DataFrame
+        
+        Returns:
+            包含 date, total, cash 列的 DataFrame
+        """
         return pd.DataFrame(self.equity_curve)
 
-    def get_daily_pnl_df(self):
+    def get_daily_pnl_df(self) -> pd.DataFrame:
+        """
+        获取每日盈亏 DataFrame
+        
+        Returns:
+            包含 date, pnl, return, total 列的 DataFrame
+        """
         return pd.DataFrame(self.daily_pnl)
 
-    def get_trades_df(self):
+    def get_trades_df(self) -> pd.DataFrame:
+        """
+        获取交易明细 DataFrame
+        
+        Returns:
+            包含 date, code, side, price, shares, fee 列的 DataFrame
+        """
         return pd.DataFrame(self.daily_trades)

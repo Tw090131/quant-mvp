@@ -16,3 +16,19 @@ strategy
  ├─ base                策略基类
  ├─ ma_cross            示例策略
 run.py
+
+data/
+├── loader/
+│   ├── minute_hist.py      # 用 hist_min_em（回测）
+│   ├── minute_realtime.py  # 用 stock_zh_a_minute（实盘）
+│
+├── cache/
+│   ├── 300678_1min.parquet
+│
+backtest/
+├── engine.py
+├── strategy.py
+
+
+回测 → 用 stock_zh_a_hist_min_em
+实盘 / 准实时 → 用 stock_zh_a_minute
