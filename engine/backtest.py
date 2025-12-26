@@ -108,6 +108,8 @@ def run_backtest(
 
             # 执行定时任务（如果使用分钟线数据）
             if is_minute_data and strategy.context:
+                # 更新 context 的当前日期
+                strategy.context.current_date = dt
                 strategy.scheduler.on_bar(dt, strategy.context)
 
             # 获取策略信号

@@ -14,13 +14,15 @@ class Context:
     在策略执行时提供组合和数据信息
     """
     
-    def __init__(self, portfolio: Portfolio, data: Dict[str, pd.DataFrame]):
+    def __init__(self, portfolio: Portfolio, data: Dict[str, pd.DataFrame], current_date: pd.Timestamp = None):
         """
         初始化上下文
         
         Args:
             portfolio: 组合对象
             data: 股票数据字典
+            current_date: 当前日期时间
         """
         self.portfolio = portfolio
         self.data = data
+        self.current_date = current_date

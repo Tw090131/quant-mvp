@@ -55,10 +55,16 @@ class MaCross(StrategyBase):
         Args:
             context: 上下文对象，包含 portfolio 和 data
         """
-        logger.info(f"执行 market_open，当前资产: {context.portfolio.total_value():,.2f}")
+        # 获取当前交易日
+        if context.current_date is not None:
+            trade_date = context.current_date.strftime("%Y-%m-%d")
+            trade_time = context.current_date.strftime("%H:%M:%S")
+            logger.info(f"执行 market_open [交易日: {trade_date} {trade_time}]，当前资产: {context.portfolio.total_value():,.2f}")
+        else:
+            logger.info(f"执行 market_open，当前资产: {context.portfolio.total_value():,.2f}")
         
         # 计算当天的交易信号
-        current_date = pd.Timestamp.now().date() if hasattr(context, 'current_date') else None
+        current_date = context.current_date if context.current_date is not None else None
         signals = {}
         
         for code, df in self.datas.items():
