@@ -57,9 +57,12 @@ class Scheduler:
         Returns:
             True 表示匹配
         """
-        if not hasattr(dt, "time"):
+        if not isinstance(dt, pd.Timestamp):
             return False
+        
         try:
-            return dt.strftime("%H:%M") == time_str
-        except Exception:
+            # 提取小时和分钟
+            current_time = dt.strftime("%H:%M")
+            return current_time == time_str
+        except (AttributeError, ValueError):
             return False

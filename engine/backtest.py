@@ -4,7 +4,7 @@
 """
 import os
 import logging
-from typing import Dict, Type, Optional
+from typing import Any, Dict, Type, Optional
 import pandas as pd
 from engine.portfolio import Portfolio
 from engine.metrics import calc_drawdown
@@ -52,6 +52,11 @@ def run_backtest(
     # 初始化组件
     portfolio = Portfolio(init_cash=init_cash)
     strategy = StrategyClass(datas)
+    
+    # 设置策略的上下文对象
+    from engine.context import Context
+    strategy.context = Context(portfolio=portfolio, data=datas)
+    
     if risk_mgr is None:
         risk_mgr = RiskManager()
     
@@ -62,28 +67,48 @@ def run_backtest(
     if len(trade_days) == 0:
         raise ValueError(f"股票 {first_code} 没有交易日数据")
     
-    logger.info(f"开始回测，共 {len(trade_days)} 个交易日，初始资金: {init_cash:,.0f}")
+    # 判断是日线还是分钟线数据
+    # 检查前几个时间点，如果有小时或分钟信息，则是分钟线
+    is_minute_data = False
+    sample_dts = trade_days[:min(10, len(trade_days))]
+    for dt in sample_dts:
+        if isinstance(dt, pd.Timestamp):
+            # 如果有小时或分钟信息（不是00:00），则是分钟线
+            if hasattr(dt, 'hour') and hasattr(dt, 'minute'):
+                if dt.hour != 0 or dt.minute != 0:
+                    is_minute_data = True
+                    break
+        elif ':' in str(dt):
+            # 字符串中包含冒号，可能是时间格式
+            is_minute_data = True
+            break
+    
+    logger.info(f"开始回测，共 {len(trade_days)} 个时间点，初始资金: {init_cash:,.0f}")
+    if is_minute_data:
+        logger.info("检测到分钟线数据，支持定时任务功能")
     
     # 回测主循环
     for i, dt in enumerate(trade_days):
         try:
-            # T+1 买入转持仓
-            portfolio.on_new_day()
+            # T+1 买入转持仓（仅在日期变化时执行）
+            if i == 0 or (hasattr(dt, 'date') and hasattr(trade_days[i-1], 'date') and dt.date() != trade_days[i-1].date()):
+                portfolio.on_new_day()
 
             # 更新每个股票价格
             for code, df in datas.items():
                 if dt not in df.index:
-                    logger.warning(f"{code} 在 {dt} 无数据，跳过")
                     continue
                 try:
                     price = df.loc[dt, "close"]
                     if pd.isna(price) or price <= 0:
-                        logger.warning(f"{code} 在 {dt} 价格无效: {price}")
                         continue
                     portfolio.update_price(code, price)
-                except KeyError:
-                    logger.warning(f"{code} 在 {dt} 缺少 'close' 列")
+                except (KeyError, IndexError):
                     continue
+
+            # 执行定时任务（如果使用分钟线数据）
+            if is_minute_data and strategy.context:
+                strategy.scheduler.on_bar(dt, strategy.context)
 
             # 获取策略信号
             target_weights = strategy.on_bar(dt)
@@ -103,10 +128,27 @@ def run_backtest(
                 break
 
             # 日结，计算总资产和每日盈亏
-            portfolio.record_daily(dt, trades_today)
+            if not is_minute_data:
+                # 日线数据，每天都记录
+                portfolio.record_daily(dt, trades_today)
+            else:
+                # 分钟线数据，只在日期变化时记录（新的一天开始时，记录前一天）
+                is_new_day = False
+                if i == 0:
+                    is_new_day = True
+                elif hasattr(dt, 'date') and hasattr(trade_days[i-1], 'date'):
+                    if dt.date() != trade_days[i-1].date():
+                        is_new_day = True
+                        # 记录前一天的日结
+                        portfolio.record_daily(trade_days[i-1], [])
+                
+                # 最后一天，记录当天
+                if i == len(trade_days) - 1:
+                    portfolio.record_daily(dt, trades_today)
             
             # 进度提示
-            if (i + 1) % 50 == 0 or i == len(trade_days) - 1:
+            progress_interval = 50 if not is_minute_data else 1000
+            if (i + 1) % progress_interval == 0 or i == len(trade_days) - 1:
                 logger.info(f"回测进度: {i+1}/{len(trade_days)}, 当前资产: {current_value:,.0f}")
                 
         except Exception as e:
@@ -119,6 +161,29 @@ def run_backtest(
     pnl_df = portfolio.get_daily_pnl_df()
 
     if not trades_df.empty:
+        # 格式化日期列，保留时分秒信息
+        trades_df = trades_df.copy()
+        if 'date' in trades_df.columns:
+            # 转换为 datetime 类型
+            date_series = pd.to_datetime(trades_df['date'])
+            
+            # 检查是否包含时分秒信息（基于 is_minute_data 或检查实际数据）
+            has_time_info = is_minute_data
+            if not has_time_info:
+                # 检查实际数据是否包含时分秒
+                sample_dates = date_series.head(10)
+                has_time_info = any(
+                    isinstance(dt, pd.Timestamp) and 
+                    (dt.hour != 0 or dt.minute != 0 or dt.second != 0)
+                    for dt in sample_dates
+                )
+            
+            # 根据是否有时分秒信息格式化
+            if has_time_info:
+                trades_df['date'] = date_series.dt.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                trades_df['date'] = date_series.dt.strftime('%Y-%m-%d')
+        
         trades_df.to_csv(trade_log_csv, index=False)
         logger.info(f"交易明细已写入: {os.path.abspath(trade_log_csv)}")
 
