@@ -15,6 +15,9 @@ class Config:
     CACHE_DIR = "data_cache"
     DATA_DIR = "data"
     
+    # 数据源选择：'akshare' 或 'tushare'
+    DATA_SOURCE = "tushare"  # 默认使用 akshare
+    
     # 回测默认参数
     DEFAULT_INIT_CASH = 1_000_000
     DEFAULT_FEE_RATE = 0.001

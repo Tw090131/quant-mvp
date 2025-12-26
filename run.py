@@ -10,16 +10,21 @@ from strategy.ma_cross import MaCross
 from strategy.daily_strategy import DailyStrategy  # 使用 run_daily 的示例策略
 from config import Config
 import akshare as ak
+import tushare as ts
+from config import Config
+
+# 设置 tushare token
+ts.set_token('87db6ebbe821bf474e7835abf0dd9ec2be7f9dbbe9a06210f17183ad')
 # 初始化日志
 Config.setup_logging()
 logger = logging.getLogger(__name__)
 
 # ===== 配置 =====
 codes = ["603296"]
-start_date = "2025-12-22"
+start_date = "2025-12-10"
 # end_date = None  # None 表示到今天，也可以设置为 "2025-12-31" 这样的具体日期
 # 回测到指定日期
-end_date = "2025-12-26"
+end_date = "2025-12-20"
 
 # 数据模式选择：'daily' 或 'minute'
 # 'daily': 日线数据，回测速度快，但 run_daily 定时任务不会触发

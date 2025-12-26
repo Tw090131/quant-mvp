@@ -1,12 +1,28 @@
 """
 数据缓存加载模块
 提供带缓存的数据加载功能，支持日线和分钟线数据
+支持多种数据源：akshare、tushare
 """
 import os
 import logging
 from typing import Optional
 import pandas as pd
-from data.akshare_loader import load_ashare_daily, load_ashare_minute
+from config import Config
+
+# 配置日志
+logger = logging.getLogger(__name__)
+
+# 根据配置选择数据源
+if Config.DATA_SOURCE == "tushare":
+    try:
+        from data.tushare_loader import load_ashare_daily, load_ashare_minute
+        logger.info("使用 tushare 作为数据源")
+    except ImportError:
+        logger.warning("tushare 未安装或导入失败，回退到 akshare")
+        from data.akshare_loader import load_ashare_daily, load_ashare_minute
+        Config.DATA_SOURCE = "akshare"
+else:
+    from data.akshare_loader import load_ashare_daily, load_ashare_minute
 
 # 配置日志
 logger = logging.getLogger(__name__)
