@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 
 # ===== 配置 =====
 codes = ["603296"]
-start_date = "2025-12-10"
+start_date = "2025-12-22"
 # end_date = None  # None 表示到今天，也可以设置为 "2025-12-31" 这样的具体日期
 # 回测到指定日期
-end_date = "2025-12-20"
+end_date = "2025-12-27"
 
 # 数据模式选择：'daily' 或 'minute'
 # 'daily': 日线数据，回测速度快，但 run_daily 定时任务不会触发
@@ -115,6 +115,9 @@ result = run_backtest(
     datas,
     MaCross,
     fee_rate=Config.DEFAULT_FEE_RATE,
+    fee_mode=Config.DEFAULT_FEE_MODE,
+    fee_rate_pct=Config.DEFAULT_FEE_RATE_PCT,
+    fee_fixed=Config.DEFAULT_FEE_FIXED,
     trade_log_csv=Config.DEFAULT_TRADE_LOG_CSV,
     equity_csv=Config.DEFAULT_EQUITY_CSV,
     pnl_csv=Config.DEFAULT_PNL_CSV,

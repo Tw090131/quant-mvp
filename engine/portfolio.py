@@ -81,7 +81,10 @@ class Portfolio:
         date: pd.Timestamp, 
         target_weights: Dict[str, float], 
         risk_mgr: RiskManager, 
-        fee_rate: float = 0.001
+        fee_rate: float = 0.001,
+        fee_mode: str = 'rate',
+        fee_rate_pct: float = 0.0001,
+        fee_fixed: float = 5.0
     ) -> List[Dict]:
         """
         调仓，根据目标权重调整持仓
@@ -90,7 +93,10 @@ class Portfolio:
             date: 交易日期
             target_weights: 目标权重字典 {code: weight}
             risk_mgr: 风险管理器
-            fee_rate: 手续费率
+            fee_rate: 手续费率（旧模式，当 fee_mode='rate' 时使用）
+            fee_mode: 手续费模式，'rate'（仅费率）或 'rate+fixed'（费率+固定费用）
+            fee_rate_pct: 费率百分比（当 fee_mode='rate+fixed' 时使用），如 0.0001 表示万1
+            fee_fixed: 每笔固定费用（当 fee_mode='rate+fixed' 时使用），单位：元
             
         Returns:
             当天交易列表
@@ -124,7 +130,11 @@ class Portfolio:
                     continue
 
                 proceeds = sell_qty * price
-                fee = proceeds * fee_rate
+                # 计算手续费
+                if fee_mode == 'rate+fixed':
+                    fee = proceeds * fee_rate_pct + fee_fixed
+                else:
+                    fee = proceeds * fee_rate
 
                 self.cash += proceeds - fee
                 self.positions_hold[code] -= sell_qty
@@ -133,18 +143,23 @@ class Portfolio:
                     del self.positions_hold[code]
 
                 trades_today.append({
-                    "date": date,
-                    "code": code,
-                    "side": "SELL",
-                    "price": price,
-                    "shares": sell_qty,
-                    "fee": fee,
+                    "date": date, # 交易日期时间
+                    "code": code, # 股票代码
+                    "side": "SELL", # 交易方向
+                    "price": price, # 成交价格
+                    "shares": sell_qty, # 成交数量
+                    "amount": proceeds,  # 成交金额
+                    "fee": fee, # 手续费
                 })
 
             # === 买入（冻结）===
             elif diff > 0:
                 cost = diff * price
-                fee = cost * fee_rate
+                # 计算手续费
+                if fee_mode == 'rate+fixed':
+                    fee = cost * fee_rate_pct + fee_fixed
+                else:
+                    fee = cost * fee_rate
                 if self.cash < cost + fee:
                     logger.warning(f"{code} 资金不足，无法买入 {diff} 股，需要 {cost + fee:.2f}，可用 {self.cash:.2f}")
                     continue
@@ -158,6 +173,7 @@ class Portfolio:
                     "side": "BUY",
                     "price": price,
                     "shares": diff,
+                    "amount": cost,  # 成交金额
                     "fee": fee,
                 })
 
@@ -228,6 +244,13 @@ class Portfolio:
         获取交易明细 DataFrame
         
         Returns:
-            包含 date, code, side, price, shares, fee 列的 DataFrame
+            包含 date, code, side, price, shares, amount, fee 列的 DataFrame
+            - date: 交易日期时间
+            - code: 股票代码
+            - side: 交易方向（BUY/SELL）
+            - price: 成交价格
+            - shares: 成交数量（股）
+            - amount: 成交金额（price * shares）
+            - fee: 手续费
         """
         return pd.DataFrame(self.daily_trades)

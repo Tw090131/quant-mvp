@@ -19,6 +19,9 @@ def run_backtest(
     datas: Dict[str, pd.DataFrame],
     StrategyClass: Type[StrategyBase],
     fee_rate: float = 0.001,
+    fee_mode: str = 'rate',
+    fee_rate_pct: float = 0.0001,
+    fee_fixed: float = 5.0,
     trade_log_csv: str = "daily_trades.csv",
     equity_csv: str = "equity_curve.csv",
     pnl_csv: str = "daily_pnl.csv",
@@ -31,7 +34,10 @@ def run_backtest(
     Args:
         datas: 股票数据字典，{code: DataFrame}，DataFrame 索引为 datetime
         StrategyClass: 策略类（继承自 StrategyBase）
-        fee_rate: 手续费率
+        fee_rate: 手续费率（旧模式，当 fee_mode='rate' 时使用）
+        fee_mode: 手续费模式，'rate'（仅费率）或 'rate+fixed'（费率+固定费用，如"万1+5"）
+        fee_rate_pct: 费率百分比（当 fee_mode='rate+fixed' 时使用），如 0.0001 表示万1
+        fee_fixed: 每笔固定费用（当 fee_mode='rate+fixed' 时使用），单位：元
         trade_log_csv: 交易明细输出文件路径
         equity_csv: 资产曲线输出文件路径
         pnl_csv: 每日盈亏输出文件路径
@@ -134,6 +140,9 @@ def run_backtest(
                 target_weights=target_weights,
                 risk_mgr=risk_mgr,
                 fee_rate=fee_rate,
+                fee_mode=fee_mode,
+                fee_rate_pct=fee_rate_pct,
+                fee_fixed=fee_fixed,
             )
 
             # 检查风控
@@ -178,6 +187,13 @@ def run_backtest(
     if not trades_df.empty:
         # 格式化日期列，保留时分秒信息
         trades_df = trades_df.copy()
+        
+        # 重新排列列顺序，使其更清晰
+        column_order = ['date', 'code', 'side', 'price', 'shares', 'amount', 'fee']
+        existing_columns = [col for col in column_order if col in trades_df.columns]
+        other_columns = [col for col in trades_df.columns if col not in column_order]
+        trades_df = trades_df[existing_columns + other_columns]
+        
         if 'date' in trades_df.columns:
             # 转换为 datetime 类型
             date_series = pd.to_datetime(trades_df['date'])

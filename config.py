@@ -16,11 +16,18 @@ class Config:
     DATA_DIR = "data"
     
     # 数据源选择：'akshare' 或 'tushare'
-    DATA_SOURCE = "tushare"  # 默认使用 akshare
+    DATA_SOURCE = "akshare"  # 默认使用 akshare
     
     # 回测默认参数
     DEFAULT_INIT_CASH = 1_000_000
-    DEFAULT_FEE_RATE = 0.001
+    # 手续费配置
+    # 方式1：固定费率模式（旧模式，兼容）
+    DEFAULT_FEE_RATE = 0.001  # 0.1%
+    # 方式2：费率+固定费用模式（新模式，如"万1+5"）
+    DEFAULT_FEE_RATE_PCT = 0.0001  # 万1，即0.01%（成交金额的万分之一）
+    DEFAULT_FEE_FIXED = 5.0  # 每笔固定费用5元
+    # 手续费模式：'rate'（仅费率）或 'rate+fixed'（费率+固定费用）
+    DEFAULT_FEE_MODE = 'rate+fixed'  # 默认使用"万1+5"模式
     
     # 风控默认参数
     DEFAULT_MAX_POSITION_PCT = 0.3
