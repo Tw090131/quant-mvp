@@ -423,18 +423,22 @@ def load_daily_df_with_cache(
                 
                 # 保存缓存（使用配置的格式偏好）
                 # 注意：如果原始数据来源是外部 parquet，不保存缓存
+                # 日线数据模式也不保存到本地缓存（用户要求）
                 if data_source != "external_parquet":
-                    save_format = Config.CACHE_FORMAT_PREFERENCE
-                    if save_format == "auto":
-                        save_format = "parquet"  # 默认使用 parquet
-                    
-                    if save_format == "parquet":
-                        cache_file = os.path.join(CACHE_DIR, f"{code}.parquet")
-                    else:
-                        cache_file = os.path.join(CACHE_DIR, f"{code}.csv")
-                    
-                    _save_cache_file(df, cache_file, save_format)
-                    logger.info(f"已更新 {code} 日线缓存（{save_format.upper()}格式），共 {len(df)} 条")
+                    # 日线数据不保存到本地缓存，直接跳过
+                    logger.debug(f"{code} 日线数据不保存到本地缓存（data_mode='daily'）")
+                    # 如果需要保存，取消下面的注释
+                    # save_format = Config.CACHE_FORMAT_PREFERENCE
+                    # if save_format == "auto":
+                    #     save_format = "parquet"  # 默认使用 parquet
+                    # 
+                    # if save_format == "parquet":
+                    #     cache_file = os.path.join(CACHE_DIR, f"{code}.parquet")
+                    # else:
+                    #     cache_file = os.path.join(CACHE_DIR, f"{code}.csv")
+                    # 
+                    # _save_cache_file(df, cache_file, save_format)
+                    # logger.info(f"已更新 {code} 日线缓存（{save_format.upper()}格式），共 {len(df)} 条")
             elif df.empty:
                 logger.warning(f"{code} 未获取到数据")
         except Exception as e:

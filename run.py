@@ -30,7 +30,7 @@ end_date = "2025-12-20"
 # 数据模式选择：'daily' 或 'minute'
 # 'daily': 日线数据，回测速度快，但 run_daily 定时任务不会触发
 # 'minute': 分钟线数据，支持 run_daily 定时任务，但回测速度较慢
-data_mode = "minute"  # 改为 "minute" 以启用 run_daily 功能
+data_mode = "daily"  # 改为 "minute" 以启用 run_daily 功能
 
 # 策略选择：'ma_cross' 或 'platform_breakout'
 strategy_name = "platform_breakout"  # 选择使用的策略
