@@ -20,11 +20,11 @@ Config.setup_logging()
 logger = logging.getLogger(__name__)
 
 # ===== 配置 =====
-codes = ["000042"]
-start_date = "2025-4-22"
+codes = ["000069"]
+start_date = "2025-07-12"
 # end_date = None  # None 表示到今天，也可以设置为 "2025-12-31" 这样的具体日期
 # 回测到指定日期
-end_date = "2025-9-27"
+end_date = "2025-08-20"
 
 # 数据模式选择：'daily' 或 'minute'
 # 'daily': 日线数据，回测速度快，但 run_daily 定时任务不会触发
@@ -36,14 +36,6 @@ date_range_str = f"{start_date} 至 {end_date if end_date else '今天'}"
 logger.info(f"开始加载数据，股票: {codes}, 日期范围: {date_range_str}, 数据模式: {data_mode}")
 
 datas = {}
-# df = ak.stock_zh_a_hist_min_em(
-#             symbol="300576",
-#             start_date="2025-08-21 09:32:00",
-#             end_date="2025-09-01 09:32:00",  # 使用默认的最大值
-#             period="5", 
-#             adjust="qfq"
-#         )
-# print(df)
 
 if data_mode == "daily":
     # ===== 日线回测 =====

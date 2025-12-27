@@ -10,6 +10,7 @@ from engine.portfolio import Portfolio
 from engine.metrics import calc_drawdown
 from engine.risk import RiskManager
 from strategy.base import StrategyBase
+from engine.log_helper import format_log_msg
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ def run_backtest(
                     price = df.loc[dt, "close"]
                     if pd.isna(price) or price <= 0:
                         continue
-                    portfolio.update_price(code, price)
+                    portfolio.update_price(code, price, dt)
                 except (KeyError, IndexError):
                     continue
 
@@ -148,7 +149,7 @@ def run_backtest(
             # 检查风控
             current_value = portfolio.total_value()
             if not risk_mgr.check_portfolio(current_value):
-                logger.warning(f"在 {dt} 触发风控，停止回测")
+                logger.warning(format_log_msg("触发风控，停止回测", dt))
                 break
 
             # 日结，计算总资产和每日盈亏
@@ -173,10 +174,13 @@ def run_backtest(
             # 进度提示
             progress_interval = 50 if not is_minute_data else 1000
             if (i + 1) % progress_interval == 0 or i == len(trade_days) - 1:
-                logger.info(f"回测进度: {i+1}/{len(trade_days)}, 当前资产: {current_value:,.0f}")
+                logger.info(format_log_msg(
+                    f"回测进度: {i+1}/{len(trade_days)}, 当前资产: {current_value:,.0f}",
+                    dt
+                ))
                 
         except Exception as e:
-            logger.error(f"回测在 {dt} 发生错误: {e}", exc_info=True)
+            logger.error(format_log_msg(f"回测发生错误: {e}", dt), exc_info=True)
             raise
 
     # ===== 导出 CSV =====

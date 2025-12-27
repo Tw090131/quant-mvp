@@ -8,6 +8,7 @@ from typing import Dict, Optional
 import pandas as pd
 import numpy as np
 from strategy.base import StrategyBase
+from engine.log_helper import format_log_msg
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,10 @@ class MaCross(StrategyBase):
         self, 
         datas: Dict[str, pd.DataFrame], 
         short: int = 5, 
-        long: int = 20, 
+        long: int = 15, 
         weight: float = 0.5,
-        stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None,
+        stop_loss: Optional[float] = 0.05,
+        take_profit: Optional[float] = 0.15,
         use_volume_filter: bool = False,
         min_volume_ratio: float = 1.0
     ):
@@ -67,14 +68,17 @@ class MaCross(StrategyBase):
         
         # 用于存储每只股票的买入价格（用于止损止盈判断）
         self.entry_prices: Dict[str, float] = {}
+        
+        # 用于存储昨天收盘检测到的金叉信号（今天9:58买入）
+        self.pending_buy_signals: Dict[str, Dict] = {}
 
-        # === 注册定时任务：每天9:58执行 ===
+        # === 注册定时任务：每天9:58执行买入 ===
         # 注意：需要分钟线数据才能触发定时任务
         # generate_signal=True 表示在该时间点产生交易信号
         self.run_daily(self.market_open, time='09:58', generate_signal=True)
         
-        # === 注册收盘后任务 ===
-        # 收盘后执行，用于收盘后的数据处理、统计等
+        # === 注册收盘后任务：检测金叉信号 ===
+        # 收盘后执行，检测当天是否有金叉，如果有则记录，第二天9:58买入
         self.run_daily(self.after_market_close, time='after_close')
 
         # === 预计算均线和指标 ===
@@ -84,19 +88,121 @@ class MaCross(StrategyBase):
                 logger.warning(f"{code} 数据为空或缺失 'close'，跳过")
                 continue
 
+            # 判断是日线还是分钟线数据
+            # 检查索引是否有时间信息（小时、分钟）
+            is_minute_data = False
+            if isinstance(df.index, pd.DatetimeIndex):
+                sample_idx = df.index[0] if len(df.index) > 0 else None
+                if sample_idx is not None:
+                    # 如果有小时或分钟信息（不是00:00），则是分钟线数据
+                    if hasattr(sample_idx, 'hour') and hasattr(sample_idx, 'minute'):
+                        if sample_idx.hour != 0 or sample_idx.minute != 0:
+                            is_minute_data = True
+            
             # 计算均线
-            df["ma_short"] = df["close"].rolling(self.short).mean()
-            df["ma_long"] = df["close"].rolling(self.long).mean()
+            if is_minute_data:
+                # 分钟线数据：需要先按日期分组，计算每日收盘价，再计算均线
+                # 方法：使用 resample 按日分组，取每日最后一个收盘价，然后计算均线
+                # 注意：resample('D') 会包含所有日期，但实际数据中只有交易日有数据
+                # 所以 daily_close 只包含有交易数据的日期（即交易日）
+                daily_close = df["close"].resample('D').last().dropna()  # 每日最后一个收盘价，只保留有数据的日期（交易日）
+                
+                # 计算均线（按交易日计算，不是按自然日）
+                daily_ma_short = daily_close.rolling(window=self.short, min_periods=1).mean()  # 短期均线（按交易日）
+                daily_ma_long = daily_close.rolling(window=self.long, min_periods=1).mean()  # 长期均线（按交易日）
+                
+                # 将日线均线值填充回分钟线数据
+                # 方法：为每个分钟线数据点匹配对应日期的均线值
+                df["ma_short"] = None
+                df["ma_long"] = None
+                
+                # 将日线均线值按日期匹配到分钟线数据
+                for date, ma_short_val in daily_ma_short.items():
+                    day_mask = df.index.date == date.date()
+                    df.loc[day_mask, "ma_short"] = ma_short_val
+                
+                for date, ma_long_val in daily_ma_long.items():
+                    day_mask = df.index.date == date.date()
+                    df.loc[day_mask, "ma_long"] = ma_long_val
+                
+                # 使用 ffill 填充缺失值（如果某天没有数据）
+                df["ma_short"] = df["ma_short"].ffill()
+                df["ma_long"] = df["ma_long"].ffill()
+                
+                # 调试：输出均线计算验证信息
+                if len(daily_close) > 0:
+                    # 输出前几个和后几个交易日的均线值用于验证
+                    logger.debug(f"{code} 均线计算验证（前5个交易日）:")
+                    for i, date in enumerate(daily_close.index[:5]):
+                        close_val = daily_close.loc[date]
+                        ma5_val = daily_ma_short.loc[date] if date in daily_ma_short.index else None
+                        ma15_val = daily_ma_long.loc[date] if date in daily_ma_long.index else None
+                        ma5_str = f"{ma5_val:.2f}" if ma5_val is not None else "NaN"
+                        ma15_str = f"{ma15_val:.2f}" if ma15_val is not None else "NaN"
+                        logger.debug(f"  {date.strftime('%Y-%m-%d')}: 收盘={close_val:.2f}, MA{self.short}={ma5_str}, MA{self.long}={ma15_str}")
+                    
+                    # 如果数据足够，输出8月12日附近的数据（用于与同花顺对比）
+                    target_date = pd.to_datetime("2025-08-12")
+                    if target_date.date() in [d.date() for d in daily_close.index]:
+                        logger.info(f"{code} 均线计算验证（8月12日附近）:")
+                        # 找到8月12日及其前后各2个交易日
+                        date_list = list(daily_close.index)
+                        try:
+                            target_idx = next(i for i, d in enumerate(date_list) if d.date() == target_date.date())
+                            start_idx = max(0, target_idx - 2)
+                            end_idx = min(len(date_list), target_idx + 3)
+                            for date in date_list[start_idx:end_idx]:
+                                close_val = daily_close.loc[date]
+                                ma5_val = daily_ma_short.loc[date] if date in daily_ma_short.index else None
+                                ma15_val = daily_ma_long.loc[date] if date in daily_ma_long.index else None
+                                ma5_str = f"{ma5_val:.2f}" if ma5_val is not None else "NaN"
+                                ma15_str = f"{ma15_val:.2f}" if ma15_val is not None else "NaN"
+                                marker = " <-- 目标日期" if date.date() == target_date.date() else ""
+                                logger.info(f"  {date.strftime('%Y-%m-%d')}: 收盘={close_val:.2f}, MA{self.short}={ma5_str}, MA{self.long}={ma15_str}{marker}")
+                        except StopIteration:
+                            pass
+            else:
+                # 日线数据：直接计算
+                df["ma_short"] = df["close"].rolling(self.short, min_periods=1).mean()
+                df["ma_long"] = df["close"].rolling(self.long, min_periods=1).mean()
             
             # 计算均线交叉状态（用于判断金叉死叉）
             # 1 表示短期均线在长期均线上方，0 表示在下方
             df["ma_cross_state"] = (df["ma_short"] > df["ma_long"]).astype(int)
             
             # 计算金叉和死叉信号
+            # 对于分钟线数据，只在每天的第一个时间点判断是否发生金叉死叉
             # 金叉：从0变为1（短期均线从下方穿越到上方）
             # 死叉：从1变为0（短期均线从上方穿越到下方）
-            df["golden_cross"] = (df["ma_cross_state"] == 1) & (df["ma_cross_state"].shift(1) == 0)
-            df["death_cross"] = (df["ma_cross_state"] == 0) & (df["ma_cross_state"].shift(1) == 1)
+            if is_minute_data:
+                # 分钟线数据：只在每天的第一个时间点判断交叉
+                # 先按日期分组，每天只判断第一个时间点
+                daily_first = df.groupby(df.index.date).first()
+                daily_first["ma_cross_state"] = (daily_first["ma_short"] > daily_first["ma_long"]).astype(int)
+                daily_first["prev_state"] = daily_first["ma_cross_state"].shift(1)
+                
+                # 计算每日的金叉死叉
+                daily_golden_cross = (daily_first["ma_cross_state"] == 1) & (daily_first["prev_state"] == 0)
+                daily_death_cross = (daily_first["ma_cross_state"] == 0) & (daily_first["prev_state"] == 1)
+                
+                # 将每日的金叉死叉信号映射回分钟线数据
+                # 如果当天有金叉，则当天的所有分钟都标记为 True
+                df["golden_cross"] = False
+                df["death_cross"] = False
+                
+                for date, has_golden in daily_golden_cross.items():
+                    if has_golden:
+                        day_mask = df.index.date == date
+                        df.loc[day_mask, "golden_cross"] = True
+                
+                for date, has_death in daily_death_cross.items():
+                    if has_death:
+                        day_mask = df.index.date == date
+                        df.loc[day_mask, "death_cross"] = True
+            else:
+                # 日线数据：直接计算
+                df["golden_cross"] = (df["ma_cross_state"] == 1) & (df["ma_cross_state"].shift(1) == 0)
+                df["death_cross"] = (df["ma_cross_state"] == 0) & (df["ma_cross_state"].shift(1) == 1)
             
             # 计算成交量相关指标（如果启用）
             if self.use_volume_filter and "volume" in df.columns:
@@ -122,30 +228,50 @@ class MaCross(StrategyBase):
     def market_open(self, context):
         """
         开盘前执行的逻辑（每天9:58执行）
+        执行昨天收盘检测到的金叉买入信号
         
         Args:
             context: 上下文对象，包含 portfolio 和 data
         """
         # 获取当前交易日
-        if context.current_date is not None:
-            trade_date = context.current_date.strftime("%Y-%m-%d")
-            trade_time = context.current_date.strftime("%H:%M:%S")
-            logger.info(
-                f"执行 market_open [交易日: {trade_date} {trade_time}] | "
-                f"总资产: {context.portfolio.total_value():,.2f} | "
-                f"现金: {context.portfolio.cash:,.2f} | "
-                f"持仓数量: {len(context.portfolio.positions_hold)}"
-            )
-        else:
-            logger.info(
-                f"执行 market_open | "
-                f"总资产: {context.portfolio.total_value():,.2f} | "
-                f"现金: {context.portfolio.cash:,.2f}"
-            )
+        dt = context.current_date
+        logger.info(format_log_msg(
+            f"执行 market_open | "
+            f"总资产: {context.portfolio.total_value():,.2f} | "
+            f"现金: {context.portfolio.cash:,.2f} | "
+            f"持仓数量: {len(context.portfolio.positions_hold)}",
+            dt
+        ))
         
-        # 计算当天的交易信号
+        # 执行昨天收盘检测到的金叉买入信号
         signals = {}
         current_price = context.portfolio.prices
+        
+        # 处理待买入信号（昨天收盘检测到的金叉）
+        for code, signal_info in self.pending_buy_signals.items():
+            # 检查是否已有持仓
+            has_position = code in context.portfolio.positions_hold and context.portfolio.positions_hold[code] > 0
+            
+            if not has_position:
+                # 没有持仓，执行买入
+                signals[code] = {
+                    "signal": "BUY",
+                    "reason": "昨天收盘金叉",
+                    "yesterday_date": signal_info.get("date", "未知"),
+                    "ma_short": signal_info.get("ma_short"),
+                    "ma_long": signal_info.get("ma_long"),
+                    "strength": signal_info.get("strength")
+                }
+                logger.info(format_log_msg(
+                    f"{code} 执行买入（昨天收盘金叉） | "
+                    f"日期: {signal_info.get('date', '未知')} | "
+                    f"短期均线: {signal_info.get('ma_short', 0):.2f} | "
+                    f"长期均线: {signal_info.get('ma_long', 0):.2f}",
+                    dt
+                ))
+        
+        # 清空待买入信号（已处理）
+        self.pending_buy_signals.clear()
         
         for code, df in self.datas.items():
             if df.empty:
@@ -187,13 +313,14 @@ class MaCross(StrategyBase):
                         "ma_short": ma_short,
                         "ma_long": ma_long
                     }
-                    logger.info(
-                        f"{code} 触发止损 | "
-                        f"买入价: {entry_price:.2f} | "
-                        f"当前价: {current_price_val:.2f} | "
-                        f"亏损: {pnl_ratio*100:.2f}%"
-                    )
-                    continue
+                logger.info(format_log_msg(
+                    f"{code} 触发止损 | "
+                    f"买入价: {entry_price:.2f} | "
+                    f"当前价: {current_price_val:.2f} | "
+                    f"亏损: {pnl_ratio*100:.2f}%",
+                    dt
+                ))
+                continue
                 
                 # 止盈
                 if self.take_profit and pnl_ratio >= self.take_profit:
@@ -206,12 +333,13 @@ class MaCross(StrategyBase):
                         "ma_short": ma_short,
                         "ma_long": ma_long
                     }
-                    logger.info(
+                    logger.info(format_log_msg(
                         f"{code} 触发止盈 | "
                         f"买入价: {entry_price:.2f} | "
                         f"当前价: {current_price_val:.2f} | "
-                        f"盈利: {pnl_ratio*100:.2f}%"
-                    )
+                        f"盈利: {pnl_ratio*100:.2f}%",
+                        dt
+                    ))
                     continue
             
             # 2. 检查死叉（卖出信号）
@@ -230,29 +358,6 @@ class MaCross(StrategyBase):
                 )
                 continue
             
-            # 3. 检查金叉（买入信号）
-            if not has_position and row.get("golden_cross", False):
-                # 成交量过滤（如果启用）
-                if self.use_volume_filter:
-                    volume_ratio = row.get("volume_ratio", 1.0)
-                    if pd.isna(volume_ratio) or volume_ratio < self.min_volume_ratio:
-                        logger.debug(f"{code} 金叉信号被成交量过滤（成交量比例: {volume_ratio:.2f}）")
-                        continue
-                
-                signals[code] = {
-                    "signal": "BUY",
-                    "reason": "金叉",
-                    "ma_short": ma_short,
-                    "ma_long": ma_long,
-                    "strength": (ma_short - ma_long) / ma_long,
-                    "volume_ratio": row.get("volume_ratio", None)
-                }
-                logger.info(
-                    f"{code} 产生买入信号（金叉） | "
-                    f"短期均线: {ma_short:.2f} | "
-                    f"长期均线: {ma_long:.2f} | "
-                    f"信号强度: {(ma_short - ma_long) / ma_long * 100:.2f}%"
-                )
         
         # 保存信号供 on_bar 使用
         self.daily_signals = signals
@@ -260,33 +365,127 @@ class MaCross(StrategyBase):
         buy_count = sum(1 for s in signals.values() if s["signal"] == "BUY")
         sell_count = sum(1 for s in signals.values() if s["signal"] == "SELL")
         if signals:
-            logger.info(f"market_open 计算完成 | 买入信号: {buy_count} | 卖出信号: {sell_count}")
+            logger.info(format_log_msg(
+                f"market_open 计算完成 | 买入信号: {buy_count} | 卖出信号: {sell_count}",
+                dt
+            ))
 
     def after_market_close(self, context):
         """
         收盘后执行的逻辑
+        检测当天是否有金叉信号，如果有则记录，第二天9:58买入
         
         Args:
             context: 上下文对象，包含 portfolio 和 data
         """
         # 获取当前交易日
-        if context.current_date is not None:
-            trade_date = context.current_date.strftime("%Y-%m-%d")
-            logger.info(f"执行 after_market_close [交易日: {trade_date}]，当前资产: {context.portfolio.total_value():,.2f}")
-        else:
-            logger.info(f"执行 after_market_close，当前资产: {context.portfolio.total_value():,.2f}")
+        dt = context.current_date
+        logger.info(format_log_msg(
+            f"执行 after_market_close | "
+            f"总资产: {context.portfolio.total_value():,.2f} | "
+            f"现金: {context.portfolio.cash:,.2f}",
+            dt
+        ))
         
-        # 收盘后可以执行的操作：
-        # - 统计当天的交易情况
-        # - 计算当天的收益
-        # - 准备明天的交易计划
-        # - 记录日志等
+        # 检测当天收盘是否有金叉信号
+        current_price = context.portfolio.prices
+        golden_cross_count = 0
+        signals = {}  # 用于存储卖出信号（死叉、止损、止盈）
         
-        # 示例：记录当天的持仓情况
+        for code, df in self.datas.items():
+            if df.empty:
+                continue
+            
+            # 获取当前时间点的数据（收盘数据）
+            if context.current_date is not None:
+                # 尝试找到当天的收盘数据
+                # 对于分钟线数据，找当天最后一个时间点
+                day_data = df[df.index.date == context.current_date.date()]
+                if day_data.empty:
+                    continue
+                current_idx = day_data.index[-1]
+            else:
+                # 如果没有当前日期，使用最新数据
+                current_idx = df.index[-1]
+            
+            row = df.loc[current_idx]
+            
+            # 检查数据是否有效
+            if pd.isna(row["ma_short"]) or pd.isna(row["ma_long"]):
+                continue
+            
+            ma_short = row["ma_short"]
+            ma_long = row["ma_long"]
+            current_price_val = current_price.get(code, row["close"])
+            
+            # 检查是否有持仓
+            has_position = code in context.portfolio.positions_hold and context.portfolio.positions_hold[code] > 0
+            
+            # 检查是否有死叉（卖出信号）
+            if has_position and row.get("death_cross", False):
+                signals[code] = {
+                    "signal": "SELL",
+                    "reason": "死叉",
+                    "ma_short": ma_short,
+                    "ma_long": ma_long,
+                    "strength": (ma_long - ma_short) / ma_long
+                }
+                logger.info(
+                    f"{code} 产生卖出信号（死叉） | "
+                    f"短期均线: {ma_short:.2f} | "
+                    f"长期均线: {ma_long:.2f}"
+                )
+                continue
+            
+            # 检查是否有金叉（买入信号）- 记录到待买入列表，明天9:58买入
+            if not has_position and row.get("golden_cross", False):
+                # 成交量过滤（如果启用）
+                if self.use_volume_filter:
+                    volume_ratio = row.get("volume_ratio", 1.0)
+                    if pd.isna(volume_ratio) or volume_ratio < self.min_volume_ratio:
+                        logger.debug(format_log_msg(
+                            f"{code} 金叉信号被成交量过滤（成交量比例: {volume_ratio:.2f}）",
+                            dt
+                        ))
+                        continue
+                
+                # 记录金叉信号，明天9:58买入
+                trade_date = dt.strftime("%Y-%m-%d") if dt is not None else "未知"
+                self.pending_buy_signals[code] = {
+                    "date": trade_date,
+                    "ma_short": ma_short,
+                    "ma_long": ma_long,
+                    "strength": (ma_short - ma_long) / ma_long,
+                    "volume_ratio": row.get("volume_ratio", None),
+                    "close_price": current_price_val
+                }
+                golden_cross_count += 1
+                logger.info(format_log_msg(
+                    f"{code} 检测到金叉信号（明天9:58买入） | "
+                    f"短期均线: {ma_short:.2f} | "
+                    f"长期均线: {ma_long:.2f} | "
+                    f"信号强度: {(ma_short - ma_long) / ma_long * 100:.2f}%",
+                    dt
+                ))
+        
+        # 保存卖出信号供 on_bar 使用（如果有）
+        if signals:
+            self.daily_signals.update(signals)
+        
+        # 收盘后统计
         total_value = context.portfolio.total_value()
         cash = context.portfolio.cash
         positions_value = total_value - cash
-        logger.info(f"收盘后统计 - 总资产: {total_value:,.2f}, 现金: {cash:,.2f}, 持仓市值: {positions_value:,.2f}")
+        sell_count = len(signals)
+        logger.info(format_log_msg(
+            f"收盘后统计 | "
+            f"总资产: {total_value:,.2f} | "
+            f"现金: {cash:,.2f} | "
+            f"持仓市值: {positions_value:,.2f} | "
+            f"检测到 {golden_cross_count} 个金叉信号（明天9:58买入） | "
+            f"检测到 {sell_count} 个卖出信号（明天9:58卖出）",
+            dt
+        ))
 
     def on_bar(self, dt: pd.Timestamp) -> Dict[str, float]:
         """

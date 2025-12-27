@@ -6,6 +6,7 @@ import logging
 from typing import Dict, List, Optional
 import pandas as pd
 from engine.risk import RiskManager
+from engine.log_helper import format_log_msg
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -48,16 +49,17 @@ class Portfolio:
             self.positions_hold[code] = self.positions_hold.get(code, 0) + shares
         self.positions_today.clear()
 
-    def update_price(self, code: str, price: float) -> None:
+    def update_price(self, code: str, price: float, dt: Optional[pd.Timestamp] = None) -> None:
         """
         更新股票价格
         
         Args:
             code: 股票代码
             price: 最新价格
+            dt: 当前日期（用于日志）
         """
         if price <= 0:
-            logger.warning(f"{code} 价格无效: {price}")
+            logger.warning(format_log_msg(f"{code} 价格无效: {price}", dt))
             return
         self.prices[code] = price
 
@@ -109,7 +111,7 @@ class Portfolio:
             weight = risk_mgr.cap_position(weight)
             price = self.prices.get(code)
             if not price or price <= 0:
-                logger.warning(f"{code} 价格无效，跳过调仓")
+                logger.warning(format_log_msg(f"{code} 价格无效，跳过调仓", date))
                 continue
 
             target_value = total_value * weight
