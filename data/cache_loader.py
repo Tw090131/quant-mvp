@@ -305,7 +305,11 @@ def load_daily_df_with_cache(
             end_dt = pd.Timestamp.today()
         else:
             end_dt = pd.to_datetime(end)
+            # 对于日线数据，如果 end_dt 只有日期部分，保持原样即可
+            # 日线数据的索引通常是当天的 00:00:00，所以不需要扩展
+        
         df = df[(df.index >= start_dt) & (df.index <= end_dt)]
+        logger.debug(f"[{code} 日线] 外部 Parquet 数据过滤后: {len(df)} 条，日期范围: {df.index.min()} 至 {df.index.max()}")
         return df
     
     # 确定需要获取的日期范围
@@ -398,8 +402,14 @@ def load_minute_df_with_cache(
     
     # 如果是从外部 parquet 加载的，直接返回（不需要缓存和更新）
     if data_source == "external_parquet" and not df.empty:
+        # 对于分钟线数据，结束日期应该包含当天的所有时间（到 23:59:59）
+        # 如果 end_dt 只有日期部分（00:00:00），需要扩展到当天的最后一秒
+        if end_dt.hour == 0 and end_dt.minute == 0 and end_dt.second == 0:
+            end_dt = end_dt + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+        
         # 过滤到请求的日期范围
         df = df[(df.index >= start_dt) & (df.index <= end_dt)]
+        logger.debug(f"[{code} {period}] 外部 Parquet 数据过滤后: {len(df)} 条，日期范围: {df.index.min()} 至 {df.index.max()}")
         return df
     
     fetch_start = start
