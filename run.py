@@ -8,6 +8,7 @@ from data.cache_loader import load_daily_df_with_cache, load_minute_df_with_cach
 from engine.backtest import run_backtest
 from strategy.ma_cross import MaCross
 from strategy.platform_breakout import PlatformBreakout
+from strategy.rsrs import RSRS
 from strategy.daily_strategy import DailyStrategy  # 使用 run_daily 的示例策略
 from config import Config
 import akshare as ak
@@ -21,19 +22,19 @@ Config.setup_logging()
 logger = logging.getLogger(__name__)
 
 # ===== 配置 =====
-codes = ["000423"]
+codes = ["000516"]
 start_date = "2025-03-30"
 # end_date = None  # None 表示到今天，也可以设置为 "2025-12-31" 这样的具体日期
 # 回测到指定日期
-end_date = "2025-04-7"
+end_date = "2025-08-27"
 
 # 数据模式选择：'daily' 或 'minute'
 # 'daily': 日线数据，回测速度快，但 run_daily 定时任务不会触发
 # 'minute': 分钟线数据，支持 run_daily 定时任务，但回测速度较慢
 data_mode = "daily"  # 改为 "minute" 以启用 run_daily 功能
 
-# 策略选择：'ma_cross' 或 'platform_breakout'
-strategy_name = "platform_breakout"  # 选择使用的策略
+# 策略选择：'ma_cross'、'platform_breakout' 或 'rsrs'
+strategy_name = "rsrs"  # 选择使用的策略
 
 # ===== 策略参数配置 =====
 # 根据选择的策略，配置相应的参数
@@ -58,6 +59,18 @@ elif strategy_name == "platform_breakout":
         "breakout_threshold": 0.01, # 突破阈值（1%，降低阈值以便更容易产生信号）
         "use_volume_filter": False, # 是否使用成交量过滤
         "min_volume_ratio": 1.2,   # 最小成交量比例（相对于均量）
+    }
+elif strategy_name == "rsrs":
+    # RSRS 策略参数
+    strategy_kwargs = {
+        "period": 18,              # RSRS 计算周期（交易日数）
+        "buy_threshold": 0.7,      # 买入阈值
+        "sell_threshold": -0.7,    # 卖出阈值
+        "weight": 0.5,             # 单只股票的最大权重
+        "stop_loss": 0.05,         # 止损比例（5%）
+        "take_profit": 0.15,       # 止盈比例（15%）
+        "use_rsrs_zscore": False,  # 是否使用 RSRS 标准化分数（Z-score）
+        "zscore_period": 300,      # Z-score 计算周期
     }
 
 # ===== 加载数据 =====
@@ -137,8 +150,11 @@ if strategy_name == "ma_cross":
 elif strategy_name == "platform_breakout":
     StrategyClass = PlatformBreakout
     logger.info("使用策略: 平台突破策略 (PlatformBreakout)")
+elif strategy_name == "rsrs":
+    StrategyClass = RSRS
+    logger.info("使用策略: RSRS策略 (RSRS)")
 else:
-    logger.error(f"不支持的策略: {strategy_name}，请使用 'ma_cross' 或 'platform_breakout'")
+    logger.error(f"不支持的策略: {strategy_name}，请使用 'ma_cross'、'platform_breakout' 或 'rsrs'")
     exit(1)
 
 # ===== 运行回测 =====
