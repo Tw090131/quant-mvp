@@ -221,6 +221,96 @@ def _load_cache_file(file_path: str, file_format: str, code: Optional[str] = Non
             }
             df = df.rename(columns=column_mapping)
             
+            # 处理复权：如果数据中有 adj_factor 列，检查是否需要应用复权
+            # 注意：Tushare 的复权因子（adj_factor）是累积复权因子
+            # 前复权公式：复权价格 = 原始价格 * (当前复权因子 / 基准复权因子)
+            # 
+            # Tushare 的前复权逻辑：
+            # - 如果使用 adj='qfq'，返回的价格已经是前复权后的（以最新日期为基准）
+            # - 如果自己爬取的数据，价格是未复权的，需要手动应用前复权
+            # - 基准复权因子通常是最新日期的复权因子（前复权）或 1.0（后复权）
+            #
+            # 对于用户自己爬取的数据，如果价格是未复权的，应该使用：
+            # 复权价格 = 原始价格 * (当前复权因子 / 最新复权因子)
+            if "adj_factor" in df.columns:
+                adj_factor_values = df["adj_factor"].dropna()
+                if len(adj_factor_values) > 0:
+                    latest_adj_factor = adj_factor_values.iloc[-1]
+                    first_adj_factor = adj_factor_values.iloc[0]
+                    
+                    # 检查复权因子是否有变化
+                    # 如果复权因子在不同日期有变化，说明数据可能未复权，需要应用前复权
+                    # 前复权：以最新日期为基准，将历史价格调整到最新复权因子对应的价格
+                    # 注意：如果复权因子接近1.0且无变化，数据可能已经是复权后的
+                    if abs(latest_adj_factor - first_adj_factor) > 0.001 or abs(latest_adj_factor - 1.0) > 0.01:
+                        logger.info(f"检测到复权因子（最新值={latest_adj_factor:.4f}，初始值={first_adj_factor:.4f}），应用前复权...")
+                        
+                        # 对于分钟数据，需要按日期分组处理
+                        if "trade_date" in df.columns:
+                            # 分钟线数据：需要按日期分组处理
+                            # 获取每日的复权因子（取每日最后一个复权因子作为该日的基准）
+                            daily_adj_factor = df.groupby(df["trade_date"])["adj_factor"].last()
+                            if len(daily_adj_factor) > 0:
+                                base_adj_factor = daily_adj_factor.iloc[-1]  # 最新的复权因子作为基准（前复权）
+                                
+                                # 为每分钟数据匹配对应的复权因子
+                                df["daily_adj_factor"] = df["trade_date"].map(daily_adj_factor)
+                                # 计算复权比例：当前复权因子 / 最新复权因子（前复权）
+                                df["adj_ratio"] = df["adj_factor"] / base_adj_factor
+                                
+                                # 应用复权到价格数据
+                                price_cols = ["open", "close", "high", "low"]
+                                
+                                # 记录复权前的价格（用于调试，取最后一条记录）
+                                if "close" in df.columns and len(df) > 0:
+                                    before_adj_close = df["close"].iloc[-1].copy()
+                                    sample_date = df.index[-1] if isinstance(df.index, pd.DatetimeIndex) else None
+                                
+                                for col in price_cols:
+                                    if col in df.columns:
+                                        df[col] = df[col] * df["adj_ratio"]
+                                
+                                # 验证：输出复权前后的价格对比
+                                if "close" in df.columns and len(df) > 0:
+                                    after_adj_close = df["close"].iloc[-1]
+                                    date_str = sample_date.strftime("%Y-%m-%d") if sample_date else "N/A"
+                                    logger.info(f"已应用前复权：基准复权因子={base_adj_factor:.4f}，日期={date_str}，复权前收盘价={before_adj_close:.2f}，复权后收盘价={after_adj_close:.2f}")
+                                
+                                # 删除临时列
+                                df = df.drop(columns=["daily_adj_factor", "adj_ratio"], errors="ignore")
+                        else:
+                            # 日线数据：直接处理
+                            if len(df) > 0:
+                                base_adj_factor = df["adj_factor"].iloc[-1]  # 最新的复权因子作为基准
+                                # 计算复权比例
+                                df["adj_ratio"] = df["adj_factor"] / base_adj_factor
+                                
+                                # 应用复权到价格数据
+                                price_cols = ["open", "close", "high", "low"]
+                                
+                                # 记录复权前的价格（用于调试，取最后一条记录）
+                                if "close" in df.columns and len(df) > 0:
+                                    before_adj_close = df["close"].iloc[-1].copy()
+                                    sample_date = df.index[-1] if isinstance(df.index, pd.DatetimeIndex) else None
+                                
+                                for col in price_cols:
+                                    if col in df.columns:
+                                        df[col] = df[col] * df["adj_ratio"]
+                                
+                                # 验证：输出复权前后的价格对比
+                                if "close" in df.columns and len(df) > 0:
+                                    after_adj_close = df["close"].iloc[-1]
+                                    date_str = sample_date.strftime("%Y-%m-%d") if sample_date else "N/A"
+                                    logger.info(f"已应用前复权：基准复权因子={base_adj_factor:.4f}，日期={date_str}，复权前收盘价={before_adj_close:.2f}，复权后收盘价={after_adj_close:.2f}")
+                                
+                                # 删除临时列
+                                df = df.drop(columns=["adj_ratio"], errors="ignore")
+                    else:
+                        logger.debug(f"复权因子接近 1.0 且无变化（最新值={latest_adj_factor:.4f}），数据可能已复权，跳过复权处理")
+                
+                # 删除 adj_factor 列（已应用复权或不需要，不再保留）
+                df = df.drop(columns=["adj_factor"], errors="ignore")
+            
             # 删除不需要的列（如果存在）
             # trade_date 列在分钟线数据中通常不需要（因为索引已经是 trade_time）
             # 但保留它以便需要时使用

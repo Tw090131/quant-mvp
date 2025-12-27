@@ -7,6 +7,7 @@ import pandas as pd
 from data.cache_loader import load_daily_df_with_cache, load_minute_df_with_cache
 from engine.backtest import run_backtest
 from strategy.ma_cross import MaCross
+from strategy.platform_breakout import PlatformBreakout
 from strategy.daily_strategy import DailyStrategy  # 使用 run_daily 的示例策略
 from config import Config
 import akshare as ak
@@ -20,16 +21,44 @@ Config.setup_logging()
 logger = logging.getLogger(__name__)
 
 # ===== 配置 =====
-codes = ["000069"]
-start_date = "2025-07-12"
+codes = ["000423"]
+start_date = "2025-03-01"
 # end_date = None  # None 表示到今天，也可以设置为 "2025-12-31" 这样的具体日期
 # 回测到指定日期
-end_date = "2025-08-20"
+end_date = "2025-12-20"
 
 # 数据模式选择：'daily' 或 'minute'
 # 'daily': 日线数据，回测速度快，但 run_daily 定时任务不会触发
 # 'minute': 分钟线数据，支持 run_daily 定时任务，但回测速度较慢
 data_mode = "minute"  # 改为 "minute" 以启用 run_daily 功能
+
+# 策略选择：'ma_cross' 或 'platform_breakout'
+strategy_name = "platform_breakout"  # 选择使用的策略
+
+# ===== 策略参数配置 =====
+# 根据选择的策略，配置相应的参数
+strategy_kwargs = {}
+
+if strategy_name == "ma_cross":
+    # 双均线策略参数
+    strategy_kwargs = {
+        "short": 5,      # 短期均线周期
+        "long": 15,      # 长期均线周期
+        "weight": 0.5,   # 单只股票的最大权重
+        "stop_loss": None,      # 止损比例（None 表示不启用）
+        "take_profit": None,    # 止盈比例（None 表示不启用）
+    }
+elif strategy_name == "platform_breakout":
+    # 平台突破策略参数
+    strategy_kwargs = {
+        "period": 20,              # 平台周期（交易日数）
+        "weight": 0.5,             # 单只股票的最大权重
+        "stop_loss": 0.05,         # 止损比例（5%）
+        "take_profit": 0.15,       # 止盈比例（15%）
+        "breakout_threshold": 0.01, # 突破阈值（1%，降低阈值以便更容易产生信号）
+        "use_volume_filter": False, # 是否使用成交量过滤
+        "min_volume_ratio": 1.2,   # 最小成交量比例（相对于均量）
+    }
 
 # ===== 加载数据 =====
 date_range_str = f"{start_date} 至 {end_date if end_date else '今天'}"
@@ -101,11 +130,22 @@ if not datas:
     logger.error("没有可用的数据，退出")
     exit(1)
 
+# ===== 选择策略 =====
+if strategy_name == "ma_cross":
+    StrategyClass = MaCross
+    logger.info("使用策略: 双均线策略 (MaCross)")
+elif strategy_name == "platform_breakout":
+    StrategyClass = PlatformBreakout
+    logger.info("使用策略: 平台突破策略 (PlatformBreakout)")
+else:
+    logger.error(f"不支持的策略: {strategy_name}，请使用 'ma_cross' 或 'platform_breakout'")
+    exit(1)
+
 # ===== 运行回测 =====
 logger.info("开始回测...")
 result = run_backtest(
     datas,
-    MaCross,
+    StrategyClass,
     fee_rate=Config.DEFAULT_FEE_RATE,
     fee_mode=Config.DEFAULT_FEE_MODE,
     fee_rate_pct=Config.DEFAULT_FEE_RATE_PCT,
@@ -114,6 +154,7 @@ result = run_backtest(
     equity_csv=Config.DEFAULT_EQUITY_CSV,
     pnl_csv=Config.DEFAULT_PNL_CSV,
     init_cash=Config.DEFAULT_INIT_CASH,
+    strategy_kwargs=strategy_kwargs,  # 传递策略参数
 )
 
 # ===== 输出结果 =====

@@ -28,6 +28,7 @@ def run_backtest(
     pnl_csv: str = "daily_pnl.csv",
     init_cash: float = 1_000_000,
     risk_mgr: Optional[RiskManager] = None,
+    strategy_kwargs: Optional[Dict] = None,
 ) -> Dict:
     """
     运行回测
@@ -44,6 +45,7 @@ def run_backtest(
         pnl_csv: 每日盈亏输出文件路径
         init_cash: 初始资金
         risk_mgr: 风险管理器，None 则使用默认配置
+        strategy_kwargs: 策略初始化参数字典，None 则使用策略默认参数
         
     Returns:
         包含回测结果的字典：
@@ -58,7 +60,11 @@ def run_backtest(
     
     # 初始化组件
     portfolio = Portfolio(init_cash=init_cash)
-    strategy = StrategyClass(datas)
+    # 使用自定义参数初始化策略（如果有）
+    if strategy_kwargs is not None:
+        strategy = StrategyClass(datas, **strategy_kwargs)
+    else:
+        strategy = StrategyClass(datas)
     
     # 设置策略的上下文对象
     from engine.context import Context
