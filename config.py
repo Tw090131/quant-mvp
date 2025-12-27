@@ -18,6 +18,15 @@ class Config:
     # 数据源选择：'akshare' 或 'tushare'
     DATA_SOURCE = "akshare"  # 默认使用 akshare
     
+    # 缓存格式偏好：'parquet'（优先使用parquet）、'csv'（优先使用csv）、'auto'（自动选择，parquet优先）
+    CACHE_FORMAT_PREFERENCE = "auto"  # 默认自动选择，优先使用 parquet
+    
+    # Parquet 数据路径配置（如果使用外部 parquet 文件）
+    # 日线数据路径：可以是单个文件路径或目录路径 E:\BaiduNetdiskDownload\data\stock_daily.parquet
+    PARQUET_DAILY_PATH: Optional[str] = "E:\\BaiduNetdiskDownload\\data\\stock_daily.parquet"
+    # 分钟线数据目录路径 E:\BaiduNetdiskDownload\data\stock_1min
+    PARQUET_MINUTE_DIR: Optional[str] = "E:\\BaiduNetdiskDownload\\data\\stock_1min"
+    
     # 回测默认参数
     DEFAULT_INIT_CASH = 1_000_000
     # 手续费配置
