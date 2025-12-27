@@ -10,16 +10,101 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data.cache_loader import _load_cache_file, _code_to_ts_code
 
-def test_read_parquet(file_path: str, code: str = None):
+
+def get_date_data(file_path: str, code: str = None, target_date: str = None):
+    """
+    获取指定日期的数据并打印
+    
+    Args:
+        file_path: Parquet 文件路径
+        code: 股票代码（可选，用于从多股票文件中筛选）
+        target_date: 目标日期，格式 "YYYY-MM-DD"
+    """
+    print(f"=" * 60)
+    print(f"查询指定日期数据")
+    print(f"文件: {file_path}")
+    if code:
+        print(f"股票代码: {code}")
+    if target_date:
+        print(f"目标日期: {target_date}")
+    print(f"=" * 60)
+    
+    try:
+        # 加载数据
+        df = _load_cache_file(file_path, "parquet", code=code)
+        
+        if df.empty:
+            print("[ERROR] 数据为空")
+            return
+        
+        print(f"\n[OK] 数据加载成功，共 {len(df)} 条")
+        
+        # 如果没有指定日期，显示所有数据
+        if not target_date:
+            print(f"\n所有数据（前10条）:")
+            print(df.head(10))
+            return
+        
+        # 查询指定日期的数据
+        target_dt = pd.to_datetime(target_date)
+        
+        if isinstance(df.index, pd.MultiIndex):
+            # MultiIndex 情况
+            if 'trade_date' in df.index.names:
+                date_level = df.index.names.index('trade_date')
+                date_mask = df.index.get_level_values(date_level).date == target_dt.date()
+                date_data = df[date_mask]
+            elif 'trade_time' in df.index.names:
+                time_level = df.index.names.index('trade_time')
+                time_mask = df.index.get_level_values(time_level).date == target_dt.date()
+                date_data = df[time_mask]
+            else:
+                # 使用第一层
+                level_mask = df.index.get_level_values(0).date == target_dt.date()
+                date_data = df[level_mask]
+        else:
+            # 普通索引
+            date_mask = df.index.date == target_dt.date()
+            date_data = df[date_mask]
+        
+        if len(date_data) > 0:
+            print(f"\n[{target_date}] 找到 {len(date_data)} 条数据:")
+            print(date_data)
+            
+            # 如果有收盘价，显示统计信息
+            if "close" in date_data.columns:
+                print(f"\n收盘价统计:")
+                print(f"  最小值: {date_data['close'].min():.2f}")
+                print(f"  最大值: {date_data['close'].max():.2f}")
+                print(f"  平均值: {date_data['close'].mean():.2f}")
+                if len(date_data) > 0:
+                    print(f"  最后一条: {date_data['close'].iloc[-1]:.2f}")
+        else:
+            print(f"\n[{target_date}] 未找到数据")
+            print(f"数据日期范围: {df.index.min()} 至 {df.index.max()}")
+            
+    except Exception as e:
+        print(f"[ERROR] 查询失败: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print(f"\n{'=' * 60}\n")
+
+def test_read_parquet(file_path: str, code: str = None, start_date: str = None, end_date: str = None):
     """
     测试读取 Parquet 文件
     
     Args:
         file_path: Parquet 文件路径
         code: 股票代码（可选，用于从多股票文件中筛选）
+        start_date: 开始日期，格式 "YYYY-MM-DD"（可选）
+        end_date: 结束日期，格式 "YYYY-MM-DD"（可选）
     """
     print(f"=" * 60)
     print(f"测试读取 Parquet 文件: {file_path}")
+    if start_date or end_date:
+        date_range = f"{start_date if start_date else '最早'} 至 {end_date if end_date else '最新'}"
+        print(f"日期范围: {date_range}")
     print(f"=" * 60)
     
     # 方法1：直接使用 pandas 读取
@@ -62,6 +147,113 @@ def test_read_parquet(file_path: str, code: str = None):
                 print(f"    最新值: {close_values.iloc[-1]:.2f}")
                 print(f"    初始值: {close_values.iloc[0]:.2f}")
         
+        # 如果指定了日期范围，进行过滤
+        if start_date or end_date:
+            original_count = len(df_raw)
+            original_min = df_raw.index.min() if len(df_raw) > 0 else None
+            original_max = df_raw.index.max() if len(df_raw) > 0 else None
+            
+            if isinstance(df_raw.index, pd.MultiIndex):
+                # MultiIndex 情况：检查 trade_date 或 trade_time 层级
+                if 'trade_date' in df_raw.index.names:
+                    date_level = df_raw.index.names.index('trade_date')
+                    date_values = df_raw.index.get_level_values(date_level)
+                    mask = pd.Series([True] * len(df_raw))
+                    
+                    if start_date:
+                        start_dt = pd.to_datetime(start_date)
+                        mask = mask & (date_values >= start_dt)
+                    
+                    if end_date:
+                        end_dt = pd.to_datetime(end_date)
+                        # 对于日线数据，包含当天
+                        if end_dt.hour == 0 and end_dt.minute == 0:
+                            end_dt = end_dt + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                        mask = mask & (date_values <= end_dt)
+                    
+                    df_raw = df_raw[mask.values]
+                    
+                elif 'trade_time' in df_raw.index.names:
+                    # 使用 trade_time 层级（分钟线数据）
+                    time_level = df_raw.index.names.index('trade_time')
+                    time_values = df_raw.index.get_level_values(time_level)
+                    mask = pd.Series([True] * len(df_raw))
+                    
+                    if start_date:
+                        start_dt = pd.to_datetime(start_date)
+                        if start_dt.hour == 0 and start_dt.minute == 0:
+                            start_dt = start_dt.replace(hour=9, minute=30)  # 默认开盘时间
+                        mask = mask & (time_values >= start_dt)
+                    
+                    if end_date:
+                        end_dt = pd.to_datetime(end_date)
+                        # 对于分钟线数据，包含当天的所有时间
+                        if end_dt.hour == 0 and end_dt.minute == 0:
+                            end_dt = end_dt.replace(hour=15, minute=0)  # 默认收盘时间
+                        mask = mask & (time_values <= end_dt)
+                    
+                    df_raw = df_raw[mask.values]
+                else:
+                    # 如果 MultiIndex 中没有 trade_date 或 trade_time，尝试使用第一层
+                    print(f"  警告: MultiIndex 中没有找到 trade_date 或 trade_time，尝试使用第一层索引")
+                    first_level = 0
+                    level_values = df_raw.index.get_level_values(first_level)
+                    mask = pd.Series([True] * len(df_raw))
+                    
+                    if start_date:
+                        start_dt = pd.to_datetime(start_date)
+                        mask = mask & (level_values >= start_dt)
+                    
+                    if end_date:
+                        end_dt = pd.to_datetime(end_date)
+                        if end_dt.hour == 0 and end_dt.minute == 0:
+                            end_dt = end_dt + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                        mask = mask & (level_values <= end_dt)
+                    
+                    df_raw = df_raw[mask.values]
+            else:
+                # 普通索引情况
+                mask = pd.Series([True] * len(df_raw))
+                
+                if start_date:
+                    start_dt = pd.to_datetime(start_date)
+                    mask = mask & (df_raw.index >= start_dt)
+                
+                if end_date:
+                    end_dt = pd.to_datetime(end_date)
+                    # 对于日线数据，包含当天
+                    if end_dt.hour == 0 and end_dt.minute == 0:
+                        end_dt = end_dt + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                    mask = mask & (df_raw.index <= end_dt)
+                
+                df_raw = df_raw[mask.values]
+            
+            filtered_count = len(df_raw)
+            print(f"\n  日期过滤结果:")
+            print(f"    原始数据: {original_count} 条")
+            if original_min is not None and original_max is not None:
+                print(f"    原始日期范围: {original_min} 至 {original_max}")
+            print(f"    过滤后数据: {filtered_count} 条")
+            if len(df_raw) > 0:
+                if isinstance(df_raw.index, pd.MultiIndex):
+                    if 'trade_date' in df_raw.index.names:
+                        date_level = df_raw.index.names.index('trade_date')
+                        filtered_min = df_raw.index.get_level_values(date_level).min()
+                        filtered_max = df_raw.index.get_level_values(date_level).max()
+                    elif 'trade_time' in df_raw.index.names:
+                        time_level = df_raw.index.names.index('trade_time')
+                        filtered_min = df_raw.index.get_level_values(time_level).min()
+                        filtered_max = df_raw.index.get_level_values(time_level).max()
+                    else:
+                        filtered_min = df_raw.index.get_level_values(0).min()
+                        filtered_max = df_raw.index.get_level_values(0).max()
+                else:
+                    filtered_min = df_raw.index.min()
+                    filtered_max = df_raw.index.max()
+                print(f"    过滤后日期范围: {filtered_min} 至 {filtered_max}")
+            else:
+                print(f"    警告: 过滤后数据为空！")
+        
     except Exception as e:
         print(f"[ERROR] 读取失败: {e}")
         return
@@ -70,6 +262,27 @@ def test_read_parquet(file_path: str, code: str = None):
     print("\n【方法2】使用 cache_loader._load_cache_file（处理复权等）:")
     try:
         df_processed = _load_cache_file(file_path, "parquet", code=code)
+        
+        # 如果指定了日期范围，进行过滤
+        if start_date or end_date:
+            original_count = len(df_processed)
+            if start_date:
+                start_dt = pd.to_datetime(start_date)
+                df_processed = df_processed[df_processed.index >= start_dt]
+            if end_date:
+                end_dt = pd.to_datetime(end_date)
+                # 对于日线数据，end_date 应该是当天的 00:00:00，所以需要包含当天
+                # 对于分钟线数据，需要包含当天的所有时间
+                if end_dt.hour == 0 and end_dt.minute == 0:
+                    # 日线数据：包含当天
+                    end_dt = end_dt + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                df_processed = df_processed[df_processed.index <= end_dt]
+            
+            filtered_count = len(df_processed)
+            if original_count != filtered_count:
+                print(f"  日期过滤: 原始 {original_count} 条 -> 过滤后 {filtered_count} 条")
+                if len(df_processed) > 0:
+                    print(f"  过滤后日期范围: {df_processed.index.min()} 至 {df_processed.index.max()}")
         print(f"[OK] 处理成功，共 {len(df_processed)} 条数据")
         print(f"  列名: {df_processed.columns.tolist()}")
         print(f"  索引类型: {type(df_processed.index)}")
@@ -151,31 +364,77 @@ def test_read_parquet(file_path: str, code: str = None):
 
 
 if __name__ == "__main__":
-    # 测试用例1：读取单个股票的分钟线数据
-    test_file_1 = "E:\\BaiduNetdiskDownload\\data\\stock_1min\\000423.SZ.parquet"
-    if os.path.exists(test_file_1):
-        test_read_parquet(test_file_1, code="000423")
-    else:
-        print(f"文件不存在: {test_file_1}")
+    import argparse
     
-    # 测试用例2：读取日线数据（如果存在）
-    test_file_2 = "E:\\BaiduNetdiskDownload\\data\\stock_daily.parquet"
-    if os.path.exists(test_file_2):
-        print("\n" + "=" * 60)
-        print("测试读取日线数据（多股票文件）")
-        print("=" * 60)
-        test_read_parquet(test_file_2, code="000423")
-    else:
-        print(f"文件不存在: {test_file_2}")
+    parser = argparse.ArgumentParser(description='测试读取 Parquet 文件')
+    parser.add_argument('file', nargs='?', help='Parquet 文件路径')
+    parser.add_argument('--code', '-c', help='股票代码（用于从多股票文件中筛选）')
+    parser.add_argument('--date', '-d', help='查询指定日期，格式 YYYY-MM-DD（简单方式）')
+    parser.add_argument('--start-date', '-s', help='开始日期，格式 YYYY-MM-DD（用于完整测试）')
+    parser.add_argument('--end-date', '-e', help='结束日期，格式 YYYY-MM-DD（用于完整测试）')
     
-    # 测试用例3：用户指定的文件
-    if len(sys.argv) > 1:
-        user_file = sys.argv[1]
-        user_code = sys.argv[2] if len(sys.argv) > 2 else None
-        if os.path.exists(user_file):
-            test_read_parquet(user_file, code=user_code)
+    args = parser.parse_args()
+    
+    # 如果指定了日期，使用简单的查询方法
+    if args.date:
+        if args.file and os.path.exists(args.file):
+            get_date_data(args.file, code=args.code, target_date=args.date)
         else:
-            print(f"文件不存在: {user_file}")
+            # 默认文件
+            test_file = "E:\\BaiduNetdiskDownload\\data\\stock_1min\\000423.SZ.parquet"
+            if not os.path.exists(test_file):
+                test_file = "E:\\BaiduNetdiskDownload\\data\\stock_daily.parquet"
+            if os.path.exists(test_file):
+                get_date_data(test_file, code=args.code or "000423", target_date=args.date)
+            else:
+                print(f"请指定文件路径: python test/test.py <文件路径> --date 2025-04-01")
+    # 如果提供了文件路径，使用完整测试
+    elif args.file:
+        if os.path.exists(args.file):
+            test_read_parquet(
+                args.file, 
+                code=args.code, 
+                start_date=args.start_date, 
+                end_date=args.end_date
+            )
+        else:
+            print(f"文件不存在: {args.file}")
     else:
-        print("\n提示: 可以传入文件路径作为参数，例如:")
-        print("  python test/test.py D:/stock_data/000001.SZ.parquet 000001")
+        # 默认测试用例
+        # 测试用例1：读取单个股票的分钟线数据
+        test_file_1 = "E:\\BaiduNetdiskDownload\\data\\stock_1min\\000423.SZ.parquet"
+        if os.path.exists(test_file_1):
+            test_read_parquet(
+                test_file_1, 
+                code="000423",
+                start_date=args.start_date,
+                end_date=args.end_date
+            )
+        else:
+            print(f"文件不存在: {test_file_1}")
+        
+        # 测试用例2：读取日线数据（如果存在）
+        test_file_2 = "E:\\BaiduNetdiskDownload\\data\\stock_daily.parquet"
+        if os.path.exists(test_file_2):
+            print("\n" + "=" * 60)
+            print("测试读取日线数据（多股票文件）")
+            print("=" * 60)
+            test_read_parquet(
+                test_file_2, 
+                code="000423",
+                start_date=args.start_date,
+                end_date=args.end_date
+            )
+        else:
+            print(f"文件不存在: {test_file_2}")
+        
+        # 显示使用说明
+        if not args.file:
+            print("\n使用方法:")
+            print("  1. 查询指定日期数据（简单方式）:")
+            print("     python test/test.py <文件路径> --date 2025-04-01")
+            print("     python test/test.py <文件路径> -d 2025-04-01 -c 000423")
+            print("")
+            print("  2. 完整测试（带日期范围过滤）:")
+            print("     python test/test.py <文件路径> --start-date 2025-04-01 --end-date 2025-05-20")
+            print("     python test/test.py <文件路径> -s 2025-04-01 -e 2025-05-20 -c 000423")

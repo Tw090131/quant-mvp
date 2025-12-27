@@ -195,7 +195,7 @@ def _load_cache_file(file_path: str, file_format: str, code: Optional[str] = Non
             elif "datetime" in df.columns and not isinstance(df.index, pd.DatetimeIndex):
                 df = df.set_index("datetime")
                 logger.debug("使用 datetime 列作为索引")
-            
+  
             # 确保索引是 datetime 类型
             if not isinstance(df.index, pd.DatetimeIndex):
                 try:
@@ -222,16 +222,16 @@ def _load_cache_file(file_path: str, file_format: str, code: Optional[str] = Non
             df = df.rename(columns=column_mapping)
             
             # 处理复权：如果数据中有 adj_factor 列，检查是否需要应用复权
-            # 注意：Tushare 的复权因子（adj_factor）是累积复权因子
-            # 前复权公式：复权价格 = 原始价格 * (当前复权因子 / 基准复权因子)
             # 
-            # Tushare 的前复权逻辑：
-            # - 如果使用 adj='qfq'，返回的价格已经是前复权后的（以最新日期为基准）
-            # - 如果自己爬取的数据，价格是未复权的，需要手动应用前复权
-            # - 基准复权因子通常是最新日期的复权因子（前复权）或 1.0（后复权）
-            #
-            # 对于用户自己爬取的数据，如果价格是未复权的，应该使用：
-            # 复权价格 = 原始价格 * (当前复权因子 / 最新复权因子)
+            # 重要：Tushare 的复权逻辑说明
+            # - Tushare 的复权是以用户设定的 end_date 开始往前复权（不是最新交易日）
+            # - 行情软件（如 akshare）是以最近一个交易日开始往前复权
+            # - 这会导致复权结果不同
+            # 
+            # 对于用户自己爬取的 Tushare 数据（未复权）：
+            # - 应该使用数据中的最新日期（end_date）的复权因子作为基准
+            # - 前复权公式：复权价格 = 原始价格 * (当前复权因子 / 基准复权因子)
+            # - 基准复权因子 = 数据中最新日期的复权因子（对应用户设定的 end_date）
             if "adj_factor" in df.columns:
                 adj_factor_values = df["adj_factor"].dropna()
                 if len(adj_factor_values) > 0:
@@ -251,7 +251,9 @@ def _load_cache_file(file_path: str, file_format: str, code: Optional[str] = Non
                             # 获取每日的复权因子（取每日最后一个复权因子作为该日的基准）
                             daily_adj_factor = df.groupby(df["trade_date"])["adj_factor"].last()
                             if len(daily_adj_factor) > 0:
-                                base_adj_factor = daily_adj_factor.iloc[-1]  # 最新的复权因子作为基准（前复权）
+                                # Tushare 复权逻辑：以数据中的最新日期（end_date）作为基准
+                                # 这对应 Tushare API 调用时用户设定的 end_date
+                                base_adj_factor = daily_adj_factor.iloc[-1]  # 数据中最新日期的复权因子作为基准
                                 
                                 # 为每分钟数据匹配对应的复权因子
                                 df["daily_adj_factor"] = df["trade_date"].map(daily_adj_factor)
@@ -281,8 +283,14 @@ def _load_cache_file(file_path: str, file_format: str, code: Optional[str] = Non
                         else:
                             # 日线数据：直接处理
                             if len(df) > 0:
-                                base_adj_factor = df["adj_factor"].iloc[-1]  # 最新的复权因子作为基准
-                                # 计算复权比例
+                                # Tushare 复权逻辑：以数据中的最新日期（end_date）作为基准
+                                # 这对应 Tushare API 调用时用户设定的 end_date
+                                # 例如：如果用户查询 2025-04-01 到 2025-05-20 的数据
+                                # 基准复权因子应该是 2025-05-20 的复权因子，而不是整个文件的最新日期
+                                base_adj_factor = df["adj_factor"].iloc[-1]  # 数据中最新日期的复权因子作为基准
+                                
+                                # 计算复权比例：当前复权因子 / 基准复权因子（前复权）
+                                # 注意：如果当日复权因子和基准复权因子相同，复权比例为1.0，价格不变
                                 df["adj_ratio"] = df["adj_factor"] / base_adj_factor
                                 
                                 # 应用复权到价格数据
